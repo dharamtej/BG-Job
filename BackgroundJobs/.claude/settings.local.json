@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization-Key: c6IAJgBrym1XykJDWhM4Ja1pxF/j8XrrblfaBCLzp+s=' -H 'User-Agent: CareerPanda-JobFetcher' -H 'Host: data.usajobs.gov' 'https://data.usajobs.gov/api/search?ResultsPerPage=5&Page=1&Keyword=software+developer')",
+      "Bash(curl -s -H 'Authorization-Key: c6IAJgBrym1XykJDWhM4Ja1pxF/j8XrrblfaBCLzp+s=' -H 'User-Agent: CareerPanda-JobFetcher' -H 'Host: data.usajobs.gov' 'https://data.usajobs.gov/api/search?ResultsPerPage=5&Page=1&Keyword=software+developer')",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

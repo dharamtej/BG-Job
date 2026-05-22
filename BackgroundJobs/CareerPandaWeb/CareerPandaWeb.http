@@ -1,0 +1,6 @@
+@CareerPandaWeb_HostAddress = http://localhost:5296
+
+GET {{CareerPandaWeb_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

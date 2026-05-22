@@ -1,0 +1,40 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("projects", Schema = "cp")]
+public partial class Cpproject
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("resume_id")]
+    public long? ResumeId { get; set; }
+
+    [Column("description")]
+    public string? Description { get; set; }
+
+    [Column("start_date")]
+    public DateOnly StartDate { get; set; }
+
+    [Column("end_date")]
+    public DateOnly? EndDate { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+    [Column("updated_on")]
+    public DateTime UpdatedOn { get; set; }
+
+    [Column("project_url")]
+    public string? ProjectUrl { get; set; }
+
+    [Column("title")]
+    public string? Title { get; set; }
+
+    [Column("pdf_url")]
+    public string? PdfUrl { get; set; }
+
+}

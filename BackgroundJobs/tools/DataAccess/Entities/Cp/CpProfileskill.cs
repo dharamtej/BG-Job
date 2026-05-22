@@ -1,0 +1,29 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("profile_skills", Schema = "cp")]
+public partial class CpProfileskill
+{
+    [Key]
+    [Column("resume_id")]
+    public long ResumeId { get; set; }
+
+    [Key]
+    [Column("skill_id")]
+    public long SkillId { get; set; }
+
+    [Column("proficiency")]
+    public int? Proficiency { get; set; }
+
+    [Column("years_experience")]
+    public decimal? YearsExperience { get; set; }
+
+    [Column("last_used_year")]
+    public int? LastUsedYear { get; set; }
+
+    [Column("resume_category")]
+    public string? ResumeCategory { get; set; }
+
+}

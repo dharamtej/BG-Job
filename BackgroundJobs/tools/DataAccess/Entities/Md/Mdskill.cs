@@ -1,0 +1,25 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Md;
+
+[Table("skills", Schema = "md")]
+public partial class Mdskill
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("slug")]
+    public string Slug { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; }
+
+    [Column("category")]
+    public string? Category { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+}

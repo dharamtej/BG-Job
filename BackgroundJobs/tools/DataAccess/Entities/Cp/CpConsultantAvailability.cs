@@ -1,0 +1,28 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("consultant_availability", Schema = "cp")]
+public partial class CpConsultantAvailability
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("consultant_id")]
+    public long ConsultantId { get; set; }
+
+    [Column("consultation_date")]
+    public DateOnly? ConsultationDate { get; set; }
+
+    [Column("start_time")]
+    public DateTime? StartTime { get; set; }
+
+    [Column("end_time")]
+    public DateTime? EndTime { get; set; }
+
+    [Column("time_zone")]
+    public string? TimeZone { get; set; }
+
+}

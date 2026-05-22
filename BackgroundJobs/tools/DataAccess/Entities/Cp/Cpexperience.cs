@@ -1,0 +1,46 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("experiences", Schema = "cp")]
+public partial class Cpexperience
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("resume_id")]
+    public long? ResumeId { get; set; }
+
+    [Column("company_id")]
+    public long? CompanyId { get; set; }
+
+    [Column("start_date")]
+    public DateOnly StartDate { get; set; }
+
+    [Column("end_date")]
+    public DateOnly? EndDate { get; set; }
+
+    [Column("is_current")]
+    public bool IsCurrent { get; set; }
+
+    [Column("description")]
+    public string? Description { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+    [Column("updated_on")]
+    public DateTime UpdatedOn { get; set; }
+
+    [Column("job_role_id")]
+    public int JobRoleId { get; set; }
+
+    [Column("company_name")]
+    public string CompanyName { get; set; }
+
+    [Column("location")]
+    public string? Location { get; set; }
+
+}

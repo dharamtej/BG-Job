@@ -1,0 +1,37 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("agent_assignments", Schema = "cp")]
+public partial class CpAgentassignment
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("request_id")]
+    public long RequestId { get; set; }
+
+    [Column("agent_id")]
+    public long AgentId { get; set; }
+
+    [Column("assigned_by_admin_id")]
+    public long AssignedByAdminId { get; set; }
+
+    [Column("allowed_scopes")]
+    public string[] AllowedScopes { get; set; }
+
+    [Column("status")]
+    public string Status { get; set; }
+
+    [Column("expires_at")]
+    public DateTime? ExpiresAt { get; set; }
+
+    [Column("created_at")]
+    public DateTime CreatedAt { get; set; }
+
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
+
+}

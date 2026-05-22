@@ -1,0 +1,49 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Md;
+
+[Table("consultation_services", Schema = "md")]
+public partial class MdConsultationservice
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("category_id")]
+    public long? CategoryId { get; set; }
+
+    [Column("service")]
+    public string? Service { get; set; }
+
+    [Column("description")]
+    public string? Description { get; set; }
+
+    [Column("default_price")]
+    public decimal? DefaultPrice { get; set; }
+
+    [Column("default_duration_minutes")]
+    public int? DefaultDurationMinutes { get; set; }
+
+    [Column("default_buffer_time")]
+    public int? DefaultBufferTime { get; set; }
+
+    [Column("default_commision_percentage")]
+    public decimal DefaultCommisionPercentage { get; set; }
+
+    [Column("is_popular")]
+    public bool? IsPopular { get; set; }
+
+    [Column("status")]
+    public bool? Status { get; set; }
+
+    [Column("icon")]
+    public string? Icon { get; set; }
+
+    [Column("image")]
+    public string? Image { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+}

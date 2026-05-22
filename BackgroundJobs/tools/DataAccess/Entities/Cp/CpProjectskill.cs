@@ -1,0 +1,17 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("project_skills", Schema = "cp")]
+public partial class CpProjectskill
+{
+    [Key]
+    [Column("project_id")]
+    public long ProjectId { get; set; }
+
+    [Key]
+    [Column("skill_id")]
+    public long SkillId { get; set; }
+
+}

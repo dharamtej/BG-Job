@@ -1,0 +1,31 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.pdb
+*.exe
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## IDE
+.vs/
+.idea/
+*.swp
+*~
+
+## Secrets
+appsettings.*.local.json
+secrets.json
+*.pfx
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Test results
+TestResults/
+coverage/

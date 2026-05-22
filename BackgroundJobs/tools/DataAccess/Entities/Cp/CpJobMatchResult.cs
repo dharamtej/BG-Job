@@ -1,0 +1,67 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("job_match_results", Schema = "cp")]
+public partial class CpJobMatchResult
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("user_id")]
+    public long UserId { get; set; }
+
+    [Column("resume_id")]
+    public long? ResumeId { get; set; }
+
+    [Column("jd_source")]
+    public int JdSource { get; set; }
+
+    [Column("job_id")]
+    public long? JobId { get; set; }
+
+    [Column("jd_text")]
+    public string? JdText { get; set; }
+
+    [Column("status")]
+    public string Status { get; set; }
+
+    [Column("job_score")]
+    public int? JobScore { get; set; }
+
+    [Column("viewed")]
+    public bool? Viewed { get; set; }
+
+    [Column("saved")]
+    public bool? Saved { get; set; }
+
+    [Column("applied")]
+    public bool? Applied { get; set; }
+
+    [Column("shared")]
+    public bool? Shared { get; set; }
+
+    [Column("result_json")]
+    public string? ResultJson { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+    [Column("updated_on")]
+    public DateTime? UpdatedOn { get; set; }
+
+    [Column("job_title")]
+    public string? JobTitle { get; set; }
+
+    [Column("company_name")]
+    public string? CompanyName { get; set; }
+
+    [Column("job_description")]
+    public string? JobDescription { get; set; }
+
+    [Column("job_description_source")]
+    public string? JobDescriptionSource { get; set; }
+
+}

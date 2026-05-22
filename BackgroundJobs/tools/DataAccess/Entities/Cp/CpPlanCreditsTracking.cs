@@ -1,0 +1,43 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("plan_credits_tracking", Schema = "cp")]
+public partial class CpPlanCreditsTracking
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("user_id")]
+    public long UserId { get; set; }
+
+    [Column("subscription_id")]
+    public long SubscriptionId { get; set; }
+
+    [Column("user_subscription_id")]
+    public long UserSubscriptionId { get; set; }
+
+    [Column("resume_id")]
+    public long? ResumeId { get; set; }
+
+    [Column("consultation_id")]
+    public long? ConsultationId { get; set; }
+
+    [Column("credit_type")]
+    public string CreditType { get; set; }
+
+    [Column("created_date")]
+    public DateTime CreatedDate { get; set; }
+
+    [Column("updated_date")]
+    public DateTime? UpdatedDate { get; set; }
+
+    [Column("created_by")]
+    public long? CreatedBy { get; set; }
+
+    [Column("updated_by")]
+    public long? UpdatedBy { get; set; }
+
+}

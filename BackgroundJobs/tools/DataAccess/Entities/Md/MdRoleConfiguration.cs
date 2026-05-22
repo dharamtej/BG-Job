@@ -1,0 +1,22 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Md;
+
+[Table("role_configurations", Schema = "md")]
+public partial class MdRoleConfiguration
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("role_id")]
+    public int? RoleId { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+    [Column("updated_on")]
+    public DateTime? UpdatedOn { get; set; }
+
+}

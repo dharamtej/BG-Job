@@ -1,0 +1,40 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("user_work_authorizations", Schema = "cp")]
+public partial class CpUserWorkauthorization
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("user_id")]
+    public long UserId { get; set; }
+
+    [Column("wa_type_id")]
+    public long WaTypeId { get; set; }
+
+    [Column("start_date")]
+    public DateOnly? StartDate { get; set; }
+
+    [Column("end_date")]
+    public DateOnly? EndDate { get; set; }
+
+    [Column("is_active")]
+    public bool IsActive { get; set; }
+
+    [Column("source")]
+    public string? Source { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+    [Column("updated_on")]
+    public DateTime? UpdatedOn { get; set; }
+
+    [Column("custom_type_name")]
+    public string? CustomTypeName { get; set; }
+
+}

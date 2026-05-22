@@ -1,0 +1,28 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Md;
+
+[Table("job_roles", Schema = "md")]
+public partial class MdJobrole
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("industry_id")]
+    public int? IndustryId { get; set; }
+
+    [Column("slug")]
+    public string Slug { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; }
+
+    [Column("description")]
+    public string? Description { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+}

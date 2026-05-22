@@ -1,0 +1,25 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Md;
+
+[Table("industries", Schema = "md")]
+public partial class Mdindustry
+{
+    [Key]
+    [Column("id")]
+    public long Id { get; set; }
+
+    [Column("slug")]
+    public string Slug { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; }
+
+    [Column("description")]
+    public string? Description { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+}

@@ -1,0 +1,22 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("list_posts", Schema = "cp")]
+public partial class CpListpost
+{
+    [Key]
+    [Column("post_id")]
+    public long PostId { get; set; }
+
+    [Column("list_year")]
+    public int? ListYear { get; set; }
+
+    [Column("scope")]
+    public string? Scope { get; set; }
+
+    [Column("created_on")]
+    public DateTime CreatedOn { get; set; }
+
+}

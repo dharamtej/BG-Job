@@ -1,0 +1,46 @@
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace CareerPanda.DataAccess.Entities.Cp;
+
+[Table("job_applications", Schema = "cp")]
+public partial class CpJobapplication
+{
+    [Key]
+    [Column("id")]
+    public int Id { get; set; }
+
+    [Column("job_id")]
+    public int JobId { get; set; }
+
+    [Column("applicant_name")]
+    public string ApplicantName { get; set; }
+
+    [Column("applicant_email")]
+    public string ApplicantEmail { get; set; }
+
+    [Column("applicant_phone")]
+    public string? ApplicantPhone { get; set; }
+
+    [Column("applicant_linkedin")]
+    public string? ApplicantLinkedin { get; set; }
+
+    [Column("resume_url")]
+    public string? ResumeUrl { get; set; }
+
+    [Column("cover_letter_url")]
+    public string? CoverLetterUrl { get; set; }
+
+    [Column("cover_letter_text")]
+    public string? CoverLetterText { get; set; }
+
+    [Column("status")]
+    public string? Status { get; set; }
+
+    [Column("created_at")]
+    public DateTime? CreatedAt { get; set; }
+
+    [Column("updated_at")]
+    public DateTime? UpdatedAt { get; set; }
+
+}
