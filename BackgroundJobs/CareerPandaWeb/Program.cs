@@ -29,7 +29,9 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 var configuration = builder.Configuration;
-var postgresConnection = ConnectionStringResolver.Resolve(configuration);
+// Convert postgresql:// URI → Npgsql key=value format.
+// Railway provides a URI; Npgsql 6.x (pulled in by Hangfire.PostgreSql) rejects URI format.
+var postgresConnection = ToNpgsqlKeyValue(ConnectionStringResolver.Resolve(configuration));
 
 // Ensure ApplicationContext sees the resolved connection (env / user secrets override appsettings).
 configuration.GetSection("Connection")["Connection"] = postgresConnection;
@@ -102,13 +104,11 @@ if (config.CareerPandaSettingsConfig.DBProvider.Equals("PostgreSQL", StringCompa
 }
 
 // ── Hangfire — job scheduling ─────────────────────────────────────────────
-// Hangfire.PostgreSql requires key=value format; Railway provides a postgresql:// URI.
-var hangfireConnection = ToNpgsqlKeyValue(postgresConnection);
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
-    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(hangfireConnection)));
+    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(postgresConnection)));
 builder.Services.AddHangfireServer(o => o.WorkerCount = 2);
 builder.Services.AddSingleton<JobSchedulerService>();
 
