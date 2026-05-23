@@ -47,7 +47,7 @@ public class PrimeVendorJobsJobHandler : JobFetchBaseHandler
         var queryText  = input.SearchQuery ?? PrimeVendorQueries[(page - 1) % PrimeVendorQueries.Length];
         var query      = Uri.EscapeDataString(queryText);
         var location   = Uri.EscapeDataString(input.Location ?? "United States");
-        var datePosted = input.HoursBack <= 24 ? "today" : input.HoursBack <= 72 ? "3days" : "week";
+        var datePosted = input.HoursBack <= 24 ? "today" : input.HoursBack <= 72 ? "3days" : input.HoursBack <= 168 ? "week" : "month";
 
         var url = $"https://jsearch.p.rapidapi.com/search?query={query}%20in%20{location}" +
                   $"&page={page}&num_pages=1&date_posted={datePosted}&employment_types=CONTRACTOR";

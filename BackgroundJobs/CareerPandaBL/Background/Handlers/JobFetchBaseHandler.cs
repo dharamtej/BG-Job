@@ -29,7 +29,7 @@ public abstract class JobFetchBaseHandler : IJobHandler
     }
 
     // ── IJobHandler entry point ──────────────────────────────────────────────
-    public async Task ExecuteAsync(
+    public virtual async Task ExecuteAsync(
         JobWorkRequest request,
         IJobProgressReporter progress,
         CancellationToken cancellationToken)

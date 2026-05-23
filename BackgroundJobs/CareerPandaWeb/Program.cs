@@ -2,6 +2,8 @@ using System.Text;
 using System.Threading.RateLimiting;
 using CareerPanda.BL.Background;
 using CareerPanda.BL.Background.Handlers;
+using Hangfire;
+using Hangfire.PostgreSql;
 using CareerPanda.BL.Logic;
 using CareerPanda.BL.Services;
 using CareerPanda.DataAccess.DA;
@@ -41,8 +43,38 @@ builder.Services.AddHttpClient("ExternalAuth");
 
 // Named HTTP clients for job-fetch handlers
 builder.Services.AddHttpClient("JSearch",  c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("Adzuna", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 builder.Services.AddHttpClient("TheMuse",  c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient("USAJobs",  c => c.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient("Wikipedia", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(10);
+    // Wikipedia API requires a descriptive User-Agent identifying the application
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 (careerpanda.com)");
+});
+builder.Services.AddHttpClient("RemoteOK", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 JobAggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+builder.Services.AddHttpClient("Jobicy", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 JobAggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+builder.Services.AddHttpClient("Arbeitnow", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 JobAggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<JobCancellationRegistry>();
@@ -69,6 +101,15 @@ if (config.CareerPandaSettingsConfig.DBProvider.Equals("PostgreSQL", StringCompa
     builder.Services.AddScoped<IJobFetchDA, JobFetchDAPostgres>();
 }
 
+// ── Hangfire — job scheduling ─────────────────────────────────────────────
+builder.Services.AddHangfire(cfg => cfg
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(postgresConnection)));
+builder.Services.AddHangfireServer(o => o.WorkerCount = 2);
+builder.Services.AddSingleton<JobSchedulerService>();
+
 builder.Services.AddSingleton<IBackgroundJobQueue>(sp =>
     new BackgroundJobQueue(config.BackgroundJobsConfig.QueueCapacity));
 builder.Services.AddSingleton<JobExecutionService>();
@@ -76,12 +117,17 @@ builder.Services.AddSingleton<IJobHandler, DefaultJobHandler>();
 
 // ── Job Fetch Handlers (one per category) ─────────────────────────────────
 builder.Services.AddSingleton<IJobHandler, AllJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, AdzunaJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, StartupJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, UniversityJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, NonProfitJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, ContractJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, H1BJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, H1BSponsorEnrichmentJobHandler>();
 builder.Services.AddSingleton<IJobHandler, PrimeVendorJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, RemoteOkJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, JobicyJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>();
 builder.Services.AddHostedService<BackgroundJobWorker>();
 
 builder.Services.AddScoped<LoginBL>();
@@ -217,6 +263,13 @@ if (databaseLoggingEnabled)
     }
 }
 
+// ── Register all persisted schedules with Hangfire on startup ─────────────
+using (var startupScope = app.Services.CreateScope())
+{
+    var scheduler = startupScope.ServiceProvider.GetRequiredService<JobSchedulerService>();
+    await scheduler.RegisterAllAsync();
+}
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
@@ -235,6 +288,7 @@ app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.UseHangfireDashboard("/hangfire");
 app.MapControllers().RequireRateLimiting("api");
 app.MapHealthChecks("/health");
 

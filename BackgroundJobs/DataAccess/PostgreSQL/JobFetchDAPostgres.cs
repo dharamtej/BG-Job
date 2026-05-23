@@ -340,4 +340,45 @@ public class JobFetchDAPostgres : IJobFetchDA
         dest.FetchRunId        = src.FetchRunId;
         dest.Source            = src.Source;
     }
+
+    // ── H1B Sponsors ────────────────────────────────────────────────────────
+
+    public async Task<List<string>> GetActiveJobRoleQueriesAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.JobRoles
+            .AsNoTracking()
+            .Where(r => r.IsActive && r.SearchQuery != null)
+            .OrderBy(r => r.IndustryId)
+            .ThenBy(r => r.Id)
+            .Select(r => r.SearchQuery!)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.H1bSponsors
+            .AsNoTracking()
+            .Select(s => s.NormalizedName ?? s.EmployerNameKey)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default)
+    {
+        return await _db.H1bSponsors
+            .AsNoTracking()
+            .Where(s => s.NormalizedName == null)
+            .OrderByDescending(s => s.TotalApprovals)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateSponsorNormalizedNameAsync(int id, string normalizedName, CancellationToken cancellationToken = default)
+    {
+        await _db.H1bSponsors
+            .Where(s => s.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.NormalizedName, normalizedName)
+                .SetProperty(x => x.EnrichedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
 }

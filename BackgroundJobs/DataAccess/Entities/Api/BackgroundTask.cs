@@ -47,4 +47,23 @@ public class BackgroundTask
 
     [Column("updated_at")]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // ── Schedule ──────────────────────────────────────────────────────────────
+    /// <summary>None | Daily | Interval</summary>
+    [Column("schedule_type")]
+    public string? ScheduleType { get; set; }
+
+    /// <summary>Used when ScheduleType=Daily. Time of day in UTC (e.g., 02:00:00).</summary>
+    [Column("schedule_daily_time")]
+    public TimeSpan? ScheduleDailyTime { get; set; }
+
+    /// <summary>Used when ScheduleType=Interval. How often to run, in hours (e.g., 6, 12, 24).</summary>
+    [Column("schedule_interval_hours")]
+    public int? ScheduleIntervalHours { get; set; }
+
+    [Column("next_run_at")]
+    public DateTime? NextRunAt { get; set; }
+
+    [Column("last_scheduled_run_at")]
+    public DateTime? LastScheduledRunAt { get; set; }
 }

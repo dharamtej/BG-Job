@@ -31,6 +31,14 @@ public interface IJobFetchDA
         string? jobCategory = null,
         string? status = null);
 
+    // ── Job Role Queries ─────────────────────────────────────────────────────
+    Task<List<string>> GetActiveJobRoleQueriesAsync(CancellationToken cancellationToken = default);
+
+    // ── H1B Sponsors ────────────────────────────────────────────────────────
+    Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default);
+    Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default);
+    Task UpdateSponsorNormalizedNameAsync(int id, string normalizedName, CancellationToken cancellationToken = default);
+
     // ── Raw Jobs (upsert) ───────────────────────────────────────────────────
     Task<(bool isNew, int rawJobId)> UpsertRawJobAsync(ApiRawJob job);
 

@@ -22,4 +22,10 @@ public interface IBackgroundTaskDA
         int? progressPercent = null,
         string? resultPayload = null,
         string? errorMessage = null);
+
+    Task<List<BackgroundTask>> GetScheduledTasksAsync();
+
+    Task UpdateScheduleAsync(string jobId, string? scheduleType, TimeSpan? dailyTime, int? intervalHours);
+
+    Task UpdateLastScheduledRunAsync(string jobId, DateTime ranAt);
 }

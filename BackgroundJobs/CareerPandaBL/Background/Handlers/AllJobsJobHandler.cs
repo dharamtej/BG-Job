@@ -2,9 +2,19 @@
 // SOURCE : JSearch via RapidAPI — aggregates Indeed, LinkedIn, Glassdoor, ZipRecruiter
 // API KEY: JobApiSettings:JSearchApiKey  (appsettings.json)
 // DOCS   : https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+//
+// SCALE STRATEGY — roles × locations
+// JSearch pagination dies at page 2-3 for most queries on any plan.
+// Instead we expand coverage on TWO dimensions:
+//   1. Role queries  — loaded from md.job_roles (200+ roles across all industries)
+//   2. US locations  — all 50 states (hardcoded, stable)
+// Each combination fires one JSearch call at page=1 → fresh unique results.
+// 200 roles × 50 states × ~10 jobs = ~100,000 jobs per full run.
 using System.Net.Http.Json;
 using System.Text.Json;
+using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -17,38 +27,302 @@ public class AllJobsJobHandler : JobFetchBaseHandler
     protected override string JobCategory => "AllJobs";
     protected override string ApiSource   => "JSearch";
 
+    // Broad role queries — one per "page" in our loop, always page=1 on JSearch.
+    // Covers tech, business, healthcare, finance, engineering, ops, creative, and entry-level.
+    // Add more here to increase coverage on future runs.
+    private static readonly string[] BroadQueries =
+    [
+        // ── Software & Engineering ──────────────────────────────────────────
+        "software engineer",
+        "software developer",
+        "full stack developer",
+        "backend engineer",
+        "frontend developer",
+        "mobile developer",
+        "android developer",
+        "ios developer",
+        "devops engineer",
+        "site reliability engineer",
+        "cloud engineer",
+        "solutions architect",
+        "platform engineer",
+        "embedded systems engineer",
+        "firmware engineer",
+        // ── Data & AI ───────────────────────────────────────────────────────
+        "data scientist",
+        "data engineer",
+        "data analyst",
+        "machine learning engineer",
+        "ai engineer",
+        "business intelligence analyst",
+        "database administrator",
+        "data architect",
+        // ── Security & Networks ─────────────────────────────────────────────
+        "cybersecurity analyst",
+        "network engineer",
+        "systems administrator",
+        "information security engineer",
+        // ── Product & Design ────────────────────────────────────────────────
+        "product manager",
+        "product designer",
+        "ux designer",
+        "ui designer",
+        "technical writer",
+        // ── QA & Support ────────────────────────────────────────────────────
+        "quality assurance engineer",
+        "test engineer",
+        "technical support engineer",
+        // ── Business & Operations ───────────────────────────────────────────
+        "business analyst",
+        "project manager",
+        "program manager",
+        "operations manager",
+        "supply chain manager",
+        "logistics coordinator",
+        "scrum master",
+        // ── Finance & Accounting ────────────────────────────────────────────
+        "financial analyst",
+        "accountant",
+        "investment analyst",
+        "risk analyst",
+        "compliance analyst",
+        // ── Marketing & Sales ───────────────────────────────────────────────
+        "marketing manager",
+        "digital marketing specialist",
+        "sales manager",
+        "account executive",
+        "growth analyst",
+        // ── Healthcare ──────────────────────────────────────────────────────
+        "registered nurse",
+        "physician",
+        "pharmacist",
+        "physical therapist",
+        "medical coder",
+        "healthcare analyst",
+        // ── Engineering (non-software) ──────────────────────────────────────
+        "mechanical engineer",
+        "electrical engineer",
+        "civil engineer",
+        "chemical engineer",
+        "manufacturing engineer",
+        // ── HR & Legal ──────────────────────────────────────────────────────
+        "human resources manager",
+        "recruiter",
+        "legal counsel",
+        "paralegal",
+        // ── Entry-level broad sweeps ────────────────────────────────────────
+        "entry level engineer",
+        "entry level analyst",
+        "junior developer",
+        "associate product manager",
+        "internship engineering",
+    ];
+
+    private static readonly string[] UsStates =
+    [
+        "Alabama", "Alaska", "Arizona", "Arkansas", "California",
+        "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+        "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+        "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
+        "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri",
+        "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+        "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+        "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+        "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+        "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
+    ];
+
+    private const string QueriesCacheKey = "alljobs:role:queries";
+    private static readonly TimeSpan QueriesCacheTtl = TimeSpan.FromHours(6);
+
     private readonly IHttpClientFactory _http;
+    private readonly ICacheService _cache;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly string _apiKey;
     private readonly string _apiHost;
 
     public AllJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        ICacheService cacheService,
         IConfiguration configuration,
         ILogger<AllJobsJobHandler> logger)
         : base(scopeFactory, logger)
     {
-        _http    = httpClientFactory;
-        _apiKey  = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
-        _apiHost = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
+        _scopeFactory = scopeFactory;
+        _http         = httpClientFactory;
+        _cache        = cacheService;
+        _apiKey       = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
+        _apiHost      = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
     }
 
-    protected override async Task<List<ApiRawJob>> FetchPageAsync(
-        int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
+    // ── Override ExecuteAsync to iterate ALL role queries without a MaxPages cap ──
+
+    public override async Task ExecuteAsync(
+        JobWorkRequest request,
+        IJobProgressReporter progress,
+        CancellationToken cancellationToken)
+    {
+        var input = ParseInput(request.InputPayload);
+
+        // If caller passed a specific query, fall back to base handler (normal MaxPages loop)
+        if (input.SearchQuery != null)
+        {
+            await base.ExecuteAsync(request, progress, cancellationToken);
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var fetchDa = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+
+        var queries   = (await LoadQueriesAsync(cancellationToken)).ToList();
+        // If caller specified a single location use it; otherwise expand across all 50 US states
+        // null → expand across all 50 US states
+        // any explicit value (including "United States") → single location search
+        var locations = input.Location != null
+            ? (string[])[input.Location]
+            : UsStates;
+
+        int totalCalls = queries.Count * locations.Length * input.PagesPerQuery;
+
+        var run = new DataAccess.Entities.Api.ApiJobFetchRun
+        {
+            Id               = request.JobId,
+            BackgroundTaskId = request.JobId,
+            JobCategory      = JobCategory,
+            ApiSource        = ApiSource,
+            Status           = "Running",
+            StartedAt        = DateTime.UtcNow,
+            HoursBack        = input.HoursBack,
+            MaxPages         = totalCalls,
+            LocationFilter   = input.Location ?? "All US States",
+            CreatedById      = request.UserId
+        };
+        await fetchDa.CreateFetchRunAsync(run);
+
+        Logger.LogInformation("[AllJobs] Starting — {R} roles × {L} locations × {P} pages = {T} total calls",
+            queries.Count, locations.Length, input.PagesPerQuery, totalCalls);
+
+        int totalFetched = 0, totalInserted = 0, totalUpdated = 0,
+            totalSkipped = 0, totalErrors  = 0, pagesFetched  = 0, callIndex = 0;
+
+        try
+        {
+            foreach (var query in queries)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+
+                foreach (var location in locations)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    for (int p = 1; p <= input.PagesPerQuery; p++)
+                    {
+                        if (cancellationToken.IsCancellationRequested) break;
+
+                        callIndex++;
+
+                        // Override location per iteration
+                        var locInput = input with { Location = location };
+
+                        List<ApiRawJob> jobs;
+                        try
+                        {
+                            jobs = await FetchQueryPageAsync(query, p, locInput, run.Id, cancellationToken);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError(ex, "[AllJobs] Failed: '{Q}' in {L} page {P}", query, location, p);
+                            totalErrors++;
+                            continue;
+                        }
+
+                        if (jobs.Count == 0) break;
+
+                        pagesFetched++;
+                        totalFetched += jobs.Count;
+
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        totalInserted += ins;
+                        totalUpdated  += upd;
+                        totalErrors   += err;
+                        totalSkipped  += jobs.Count - ins - upd - err;
+
+                        await fetchDa.UpdateFetchRunStatsAsync(
+                            run.Id, totalFetched, totalInserted, totalUpdated,
+                            totalSkipped, totalErrors, pagesFetched);
+
+                        int pct = (int)((double)callIndex / totalCalls * 90);
+                        await progress.ReportProgressAsync(pct,
+                            $"[{callIndex}/{totalCalls}] '{query}' in {location} — Inserted: {totalInserted}, Updated: {totalUpdated}");
+
+                        await Task.Delay(InterPageDelayMs, cancellationToken);
+                    }
+                }
+            }
+
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
+        }
+        catch (OperationCanceledException)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            throw;
+        }
+
+        Logger.LogInformation(
+            "[AllJobs] Done — Roles={R} Locations={L} Fetched={F} Inserted={I} Updated={U} Skipped={S} Errors={E}",
+            queries.Count, locations.Length, totalFetched, totalInserted, totalUpdated, totalSkipped, totalErrors);
+
+        await progress.ReportProgressAsync(100,
+            $"Done — {queries.Count} roles × {locations.Length} states, Inserted: {totalInserted}, Updated: {totalUpdated}");
+    }
+
+    private async Task<IReadOnlyList<string>> LoadQueriesAsync(CancellationToken ct)
+    {
+        var cached = await _cache.GetAsync<List<string>>(QueriesCacheKey, ct);
+        if (cached is { Count: > 0 }) return cached;
+
+        using var scope = _scopeFactory.CreateScope();
+        var da      = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+        var queries = await da.GetActiveJobRoleQueriesAsync(ct);
+
+        if (queries.Count > 0)
+        {
+            await _cache.SetAsync(QueriesCacheKey, queries, QueriesCacheTtl, ct);
+            Logger.LogInformation("[AllJobs] Loaded {Count} role queries from DB", queries.Count);
+            return queries;
+        }
+
+        // DB not seeded yet — fall back to hardcoded list
+        Logger.LogWarning("[AllJobs] md.job_roles is empty — using hardcoded fallback queries. Run migration 007.");
+        return BroadQueries;
+    }
+
+    private async Task<List<ApiRawJob>> FetchQueryPageAsync(
+        string roleQuery, int jsearchPage, JobFetchInput input, string fetchRunId, CancellationToken ct)
     {
         var client     = _http.CreateClient("JSearch");
-        var query      = Uri.EscapeDataString(input.SearchQuery ?? "software engineer developer analyst");
-        var location   = Uri.EscapeDataString(input.Location    ?? "United States");
-        var datePosted = input.HoursBack <= 24 ? "today" : input.HoursBack <= 72 ? "3days" : input.HoursBack <= 168 ? "week" : "month";
+        var query      = Uri.EscapeDataString(roleQuery);
+        var location   = Uri.EscapeDataString(input.Location ?? "United States");
+        var datePosted = input.HoursBack <= 24 ? "today"
+                       : input.HoursBack <= 72  ? "3days"
+                       : input.HoursBack <= 168  ? "week"
+                       : "month";
 
         var url = $"https://jsearch.p.rapidapi.com/search?query={query}%20in%20{location}" +
-                  $"&page={page}&num_pages=1&date_posted={datePosted}";
+                  $"&page={jsearchPage}&num_pages=1&date_posted={datePosted}";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Add("X-RapidAPI-Key",  _apiKey);
         req.Headers.Add("X-RapidAPI-Host", _apiHost);
 
-        var res  = await client.SendAsync(req, ct);
+        var res = await client.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
 
         var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
@@ -58,7 +332,57 @@ public class AllJobsJobHandler : JobFetchBaseHandler
         foreach (var item in data.EnumerateArray())
         {
             try { jobs.Add(MapJob(item, fetchRunId)); }
-            catch (Exception ex) { Logger.LogWarning(ex, "[AllJobs] Map failed"); }
+            catch (Exception ex) { Logger.LogWarning(ex, "[AllJobs] Map failed for item"); }
+        }
+        return jobs;
+    }
+
+    protected override async Task<List<ApiRawJob>> FetchPageAsync(
+        int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
+    {
+        var client = _http.CreateClient("JSearch");
+
+        // If caller passed a specific query, use it (and paginate normally).
+        // Otherwise rotate through DB role queries — always page=1 on JSearch
+        // so each call returns a fresh result set instead of hitting the pagination wall.
+        string query;
+        int jsearchPage;
+        if (input.SearchQuery != null)
+        {
+            query       = Uri.EscapeDataString(input.SearchQuery);
+            jsearchPage = page;
+        }
+        else
+        {
+            var queries = await LoadQueriesAsync(ct);
+            query       = Uri.EscapeDataString(queries[(page - 1) % queries.Count]);
+            jsearchPage = 1;
+        }
+
+        var location   = Uri.EscapeDataString(input.Location ?? "United States");
+        var datePosted = input.HoursBack <= 24 ? "today"
+                       : input.HoursBack <= 72  ? "3days"
+                       : input.HoursBack <= 168  ? "week"
+                       : "month";
+
+        var url = $"https://jsearch.p.rapidapi.com/search?query={query}%20in%20{location}" +
+                  $"&page={jsearchPage}&num_pages=1&date_posted={datePosted}";
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add("X-RapidAPI-Key",  _apiKey);
+        req.Headers.Add("X-RapidAPI-Host", _apiHost);
+
+        var res = await client.SendAsync(req, ct);
+        res.EnsureSuccessStatusCode();
+
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var data = json.GetProperty("data");
+
+        var jobs = new List<ApiRawJob>();
+        foreach (var item in data.EnumerateArray())
+        {
+            try { jobs.Add(MapJob(item, fetchRunId)); }
+            catch (Exception ex) { Logger.LogWarning(ex, "[AllJobs] Map failed for item"); }
         }
         return jobs;
     }

@@ -48,16 +48,20 @@ public class BackgroundTaskDAPostgres : IBackgroundTaskDA
                 return response;
             }
 
-            existing.Name = job.Name;
-            existing.Description = job.Description;
-            existing.JobType = job.JobType;
-            existing.Status = job.Status;
-            existing.ProgressPercent = job.ProgressPercent;
-            existing.StartedAt = job.StartedAt;
-            existing.CompletedAt = job.CompletedAt;
-            existing.ResultPayload = job.ResultPayload;
-            existing.ErrorMessage = job.ErrorMessage;
-            existing.UpdatedAt = DateTime.UtcNow;
+            existing.Name                 = job.Name;
+            existing.Description          = job.Description;
+            existing.JobType              = job.JobType;
+            existing.Status               = job.Status;
+            existing.ProgressPercent      = job.ProgressPercent;
+            existing.StartedAt            = job.StartedAt;
+            existing.CompletedAt          = job.CompletedAt;
+            existing.ResultPayload        = job.ResultPayload;
+            existing.ErrorMessage         = job.ErrorMessage;
+            existing.ScheduleType         = job.ScheduleType;
+            existing.ScheduleDailyTime    = job.ScheduleDailyTime;
+            existing.ScheduleIntervalHours = job.ScheduleIntervalHours;
+            existing.NextRunAt            = job.NextRunAt;
+            existing.UpdatedAt            = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
             response.Status = Status.Success;
@@ -165,5 +169,32 @@ public class BackgroundTaskDAPostgres : IBackgroundTaskDA
             _logger.LogError(ex, "UpdateBackgroundTaskStatus failed for {JobId}", jobId);
         }
         return response;
+    }
+
+    public async Task<List<BackgroundTask>> GetScheduledTasksAsync() =>
+        await _context.BackgroundTasks
+            .Where(t => t.ScheduleType != null && t.ScheduleType != "None")
+            .ToListAsync();
+
+    public async Task UpdateScheduleAsync(
+        string jobId, string? scheduleType, TimeSpan? dailyTime, int? intervalHours)
+    {
+        var job = await _context.BackgroundTasks.FindAsync(jobId);
+        if (job == null) return;
+        job.ScheduleType          = scheduleType;
+        job.ScheduleDailyTime     = dailyTime;
+        job.ScheduleIntervalHours = intervalHours;
+        job.Status                = scheduleType is null or "None" ? JobStatus.Pending : JobStatus.Scheduled;
+        job.UpdatedAt             = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+    }
+
+    public async Task UpdateLastScheduledRunAsync(string jobId, DateTime ranAt)
+    {
+        var job = await _context.BackgroundTasks.FindAsync(jobId);
+        if (job == null) return;
+        job.LastScheduledRunAt = ranAt;
+        job.UpdatedAt          = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
     }
 }

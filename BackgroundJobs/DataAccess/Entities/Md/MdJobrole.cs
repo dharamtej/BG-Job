@@ -24,6 +24,12 @@ public partial class MdJobRole
     [Column("description")]
     public string? Description { get; set; }
 
+    [Column("search_query")]
+    public string? SearchQuery { get; set; }
+
+    [Column("is_active")]
+    public bool IsActive { get; set; } = true;
+
     [Column("created_on")]
     public DateTime CreatedOn { get; set; }
 

@@ -1,17 +1,29 @@
 // CareerPandaBL/Background/Handlers/JobFetchInput.cs
 namespace CareerPanda.BL.Background.Handlers;
 
-public class JobFetchInput
+public record JobFetchInput
 {
-    /// <summary>How many hours back to fetch jobs. Default 24.</summary>
-    public int HoursBack { get; set; } = 24;
+    /// <summary>How many hours back to fetch jobs. Default 720 (30 days → date_posted=month).</summary>
+    public int HoursBack { get; set; } = 720;
 
-    /// <summary>Maximum API pages to fetch per run. Default 5 (~50-100 jobs).</summary>
-    public int MaxPages { get; set; } = 5;
+    /// <summary>
+    /// Maximum API pages to fetch. For AllJobs this is ignored when no SearchQuery is set —
+    /// it runs every role query from md.job_roles automatically.
+    /// </summary>
+    public int MaxPages { get; set; } = 10;
+
+    /// <summary>
+    /// For AllJobs: how many JSearch pages to fetch per role query (default 1).
+    /// JSearch pagination degrades after page 2-3 so keep this at 1-2.
+    /// </summary>
+    public int PagesPerQuery { get; set; } = 1;
 
     /// <summary>Optional additional keyword filter sent to the API.</summary>
     public string? SearchQuery { get; set; }
 
-    /// <summary>Location filter. Default "United States".</summary>
-    public string? Location { get; set; } = "United States";
+    /// <summary>
+    /// Location filter. Omit (null) to expand across all 50 US states.
+    /// Pass any explicit value (e.g. "United States", "Texas") for a single-location search.
+    /// </summary>
+    public string? Location { get; set; }
 }

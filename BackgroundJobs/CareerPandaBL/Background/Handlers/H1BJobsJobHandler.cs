@@ -1,58 +1,256 @@
 // CareerPandaBL/Background/Handlers/H1BJobsJobHandler.cs
 // SOURCE : JSearch via RapidAPI — queries "h1b visa sponsorship" keywords
-//          Cross-references known top-sponsoring employers (DOL LCA public data)
+//          Cross-references USCIS FY2026 H1B employer data (api.h1b_sponsors table)
 // API KEY: JobApiSettings:JSearchApiKey
 using System.Net.Http.Json;
 using System.Text.Json;
+using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace CareerPanda.BL.Background.Handlers;
 
-public class H1BJobsJobHandler : JobFetchBaseHandler
+public partial class H1BJobsJobHandler : JobFetchBaseHandler
 {
     public override string JobType        => "H1BJobs";
     protected override string JobCategory => "H1BJobs";
     protected override string ApiSource   => "JSearch";
 
-    // Top H1B-sponsoring companies based on DOL LCA petition count data
-    private static readonly HashSet<string> KnownH1BSponsors = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "amazon","google","microsoft","apple","meta","facebook","infosys","tata consultancy",
-        "tcs","wipro","cognizant","hcl","deloitte","accenture","capgemini","ibm","oracle",
-        "salesforce","intel","nvidia","qualcomm","cisco","vmware","adobe","jpmorgan",
-        "goldman sachs","morgan stanley","ernst & young","kpmg","pwc"
-    };
+    private const string SponsorsCacheKey = "h1b:sponsors:names";
+    private static readonly TimeSpan SponsorsCacheTtl = TimeSpan.FromHours(24);
+
+    // Each entry targets a different sponsor group — page N uses entry (N-1) % length
+    // so every page fetches fresh results instead of paginating the same query (which dies at page 2-3 on free tier)
+    private static readonly string[] H1BSponsorQueries =
+    [
+        "software engineer developer amazon google",
+        "software engineer developer microsoft apple meta",
+        "software engineer developer infosys tata cognizant",
+        "software engineer developer wipro hcl accenture capgemini",
+        "software engineer developer ibm oracle salesforce",
+        "software engineer developer intel nvidia qualcomm cisco",
+        "software engineer developer vmware adobe jpmorgan",
+        "software engineer developer deloitte kpmg pwc ernst young",
+        "software engineer developer goldman sachs morgan stanley",
+        "software engineer developer facebook twitter linkedin"
+    ];
+
+    private static readonly string[] UsStates =
+    [
+        "Alabama", "Alaska", "Arizona", "Arkansas", "California",
+        "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+        "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+        "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
+        "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri",
+        "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+        "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+        "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+        "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+        "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
+    ];
 
     private readonly IHttpClientFactory _http;
+    private readonly ICacheService _cache;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly string _apiKey;
     private readonly string _apiHost;
 
     public H1BJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        ICacheService cacheService,
         IConfiguration configuration,
         ILogger<H1BJobsJobHandler> logger)
         : base(scopeFactory, logger)
     {
-        _http    = httpClientFactory;
-        _apiKey  = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
-        _apiHost = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
+        _scopeFactory = scopeFactory;
+        _http         = httpClientFactory;
+        _cache        = cacheService;
+        _apiKey       = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
+        _apiHost      = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
+    }
+
+    // ── Override: loop all role queries × all US states ──────────────────────
+
+    public override async Task ExecuteAsync(
+        JobWorkRequest request,
+        IJobProgressReporter progress,
+        CancellationToken cancellationToken)
+    {
+        var input = ParseInput(request.InputPayload);
+
+        // Specific query → fall back to base handler (normal MaxPages loop)
+        if (input.SearchQuery != null)
+        {
+            await base.ExecuteAsync(request, progress, cancellationToken);
+            return;
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var fetchDa  = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+        var sponsors = await LoadSponsorsAsync(cancellationToken);
+
+        // Load role queries same as AllJobs
+        var queries   = await fetchDa.GetActiveJobRoleQueriesAsync(cancellationToken);
+        if (queries.Count == 0) queries = [.. H1BSponsorQueries];
+
+        // null → expand across all 50 US states
+        // any explicit value (including "United States") → single location search
+        var locations = input.Location != null
+            ? [input.Location]
+            : UsStates;
+
+        int totalCalls = queries.Count * locations.Length * input.PagesPerQuery;
+
+        var run = new ApiJobFetchRun
+        {
+            Id               = request.JobId,
+            BackgroundTaskId = request.JobId,
+            JobCategory      = JobCategory,
+            ApiSource        = ApiSource,
+            Status           = "Running",
+            StartedAt        = DateTime.UtcNow,
+            HoursBack        = input.HoursBack,
+            MaxPages         = totalCalls,
+            LocationFilter   = input.Location ?? "All US States",
+            CreatedById      = request.UserId
+        };
+        await fetchDa.CreateFetchRunAsync(run);
+
+        Logger.LogInformation("[H1BJobs] Starting — {R} roles × {L} locations × {P} pages = {T} total calls",
+            queries.Count, locations.Length, input.PagesPerQuery, totalCalls);
+
+        int totalFetched = 0, totalInserted = 0, totalUpdated = 0,
+            totalSkipped = 0, totalErrors = 0, pagesFetched = 0, callIndex = 0;
+
+        try
+        {
+            foreach (var query in queries)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+
+                foreach (var location in locations)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    for (int p = 1; p <= input.PagesPerQuery; p++)
+                    {
+                        if (cancellationToken.IsCancellationRequested) break;
+
+                        callIndex++;
+                        var locInput = input with { Location = location, SearchQuery = query };
+
+                        List<ApiRawJob> jobs;
+                        try
+                        {
+                            jobs = await FetchAndFilterAsync(locInput, run.Id, sponsors, cancellationToken);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            Logger.LogError(ex, "[H1BJobs] Failed: '{Q}' in {L}", query, location);
+                            totalErrors++;
+                            continue;
+                        }
+
+                        if (jobs.Count == 0) break;
+
+                        pagesFetched++;
+                        totalFetched += jobs.Count;
+
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        totalInserted += ins;
+                        totalUpdated  += upd;
+                        totalErrors   += err;
+                        totalSkipped  += jobs.Count - ins - upd - err;
+
+                        await fetchDa.UpdateFetchRunStatsAsync(
+                            run.Id, totalFetched, totalInserted, totalUpdated,
+                            totalSkipped, totalErrors, pagesFetched);
+
+                        int pct = (int)((double)callIndex / totalCalls * 90);
+                        await progress.ReportProgressAsync(pct,
+                            $"[{callIndex}/{totalCalls}] '{query}' in {location} — H1B Inserted: {totalInserted}");
+
+                        await Task.Delay(InterPageDelayMs, cancellationToken);
+                    }
+                }
+            }
+
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
+        }
+        catch (OperationCanceledException)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            throw;
+        }
+
+        Logger.LogInformation(
+            "[H1BJobs] Done — Roles={R} Locations={L} Fetched={F} Inserted={I} Updated={U} Errors={E}",
+            queries.Count, locations.Length, totalFetched, totalInserted, totalUpdated, totalErrors);
+
+        await progress.ReportProgressAsync(100,
+            $"Done — {queries.Count} roles × {locations.Length} states, H1B Inserted: {totalInserted}, Updated: {totalUpdated}");
+    }
+
+    private async Task<List<ApiRawJob>> FetchAndFilterAsync(
+        JobFetchInput input, string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
+    {
+        var client     = _http.CreateClient("JSearch");
+        var query      = Uri.EscapeDataString(input.SearchQuery!);
+        var location   = Uri.EscapeDataString(input.Location ?? "United States");
+        var datePosted = input.HoursBack <= 24 ? "today"
+                       : input.HoursBack <= 72  ? "3days"
+                       : input.HoursBack <= 168  ? "week"
+                       : "month";
+
+        var url = $"https://jsearch.p.rapidapi.com/search?query={query}%20in%20{location}" +
+                  $"&page=1&num_pages=1&date_posted={datePosted}";
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add("X-RapidAPI-Key",  _apiKey);
+        req.Headers.Add("X-RapidAPI-Host", _apiHost);
+
+        var res = await client.SendAsync(req, ct);
+        res.EnsureSuccessStatusCode();
+
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var data = json.GetProperty("data");
+
+        var jobs = new List<ApiRawJob>();
+        foreach (var item in data.EnumerateArray())
+        {
+            try
+            {
+                var job = MapJob(item, fetchRunId, sponsors);
+                if (job.IsH1BSponsored == true) jobs.Add(job);
+            }
+            catch (Exception ex) { Logger.LogWarning(ex, "[H1BJobs] Map failed"); }
+        }
+        return jobs;
     }
 
     protected override async Task<List<ApiRawJob>> FetchPageAsync(
         int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
     {
+        var sponsors = await LoadSponsorsAsync(ct);
+
         var client     = _http.CreateClient("JSearch");
-        var baseQuery  = input.SearchQuery ?? "software engineer developer";
-        var query      = Uri.EscapeDataString($"{baseQuery} h1b visa sponsorship");
+        var baseQuery  = input.SearchQuery ?? H1BSponsorQueries[(page - 1) % H1BSponsorQueries.Length];
+        var query      = Uri.EscapeDataString(baseQuery);
         var location   = Uri.EscapeDataString(input.Location ?? "United States");
-        var datePosted = input.HoursBack <= 24 ? "today" : input.HoursBack <= 72 ? "3days" : "week";
+        var datePosted = input.HoursBack <= 24 ? "today" : input.HoursBack <= 72 ? "3days" : input.HoursBack <= 168 ? "week" : "month";
 
         var url = $"https://jsearch.p.rapidapi.com/search?query={query}%20in%20{location}" +
-                  $"&page={page}&num_pages=1&date_posted={datePosted}";
+                  $"&page=1&num_pages=1&date_posted={datePosted}";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Add("X-RapidAPI-Key",  _apiKey);
@@ -69,15 +267,62 @@ public class H1BJobsJobHandler : JobFetchBaseHandler
         {
             try
             {
-                var job = MapJob(item, fetchRunId);
-                if (job.IsH1BSponsored == true) jobs.Add(job); // only confirmed H1B
+                var job = MapJob(item, fetchRunId, sponsors);
+                if (job.IsH1BSponsored == true) jobs.Add(job);
             }
             catch (Exception ex) { Logger.LogWarning(ex, "[H1BJobs] Map failed"); }
         }
         return jobs;
     }
 
-    private ApiRawJob MapJob(JsonElement j, string fetchRunId)
+    private async Task<HashSet<string>> LoadSponsorsAsync(CancellationToken ct)
+    {
+        var cached = await _cache.GetAsync<List<string>>(SponsorsCacheKey, ct);
+        if (cached is { Count: > 0 })
+            return BuildSponsorSet(cached);
+
+        using var scope = _scopeFactory.CreateScope();
+        var da = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+        var names = await da.GetH1BSponsorNamesAsync(ct);
+
+        await _cache.SetAsync(SponsorsCacheKey, names, SponsorsCacheTtl, ct);
+
+        Logger.LogInformation("[H1BJobs] Loaded {Count} H1B sponsors from DB into cache", names.Count);
+        return BuildSponsorSet(names);
+    }
+
+    // Adds each name twice: as-is (for Wikipedia-enriched exact match)
+    // and normalized (for unenriched DB keys like "AMAZON COM INC" → "AMAZON COM")
+    private static HashSet<string> BuildSponsorSet(List<string> names)
+    {
+        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
+        {
+            set.Add(name);
+            set.Add(NormalizeCompanyName(name));
+        }
+        return set;
+    }
+
+    // Strips punctuation and common legal suffixes so "Amazon.com, Inc." matches "AMAZON COM INC"
+    [System.Text.RegularExpressions.GeneratedRegex(@"[^\w\s]")]
+    private static partial System.Text.RegularExpressions.Regex PunctuationRe();
+
+    private static readonly string[] LegalSuffixes =
+        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
+
+    private static string NormalizeCompanyName(string name)
+    {
+        var upper = name.ToUpperInvariant();
+        var stripped = PunctuationRe().Replace(upper, " ");
+        var parts = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int count = parts.Length;
+        while (count > 1 && LegalSuffixes.Contains(parts[count - 1]))
+            count--;
+        return string.Join(' ', parts, 0, count);
+    }
+
+    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)
     {
         var postDate     = ParsePostDate(j.TryGetProperty("job_posted_at_datetime_utc", out var pd)  ? pd.GetString()   : null);
         var desc         = j.TryGetProperty("job_description",    out var d)   ? d.GetString()   : null;
@@ -86,7 +331,9 @@ public class H1BJobsJobHandler : JobFetchBaseHandler
         var employerName = j.TryGetProperty("employer_name",      out var en)  ? en.GetString()  : null;
 
         var isH1B = ContainsAny(desc, "h1b","h-1b","h1-b","h 1b","visa sponsor","will sponsor","sponsorship available","work authorization") ||
-                    (employerName != null && KnownH1BSponsors.Any(k => employerName.Contains(k, StringComparison.OrdinalIgnoreCase)));
+                    (employerName != null &&
+                        (sponsors.Contains(employerName) ||
+                         sponsors.Contains(NormalizeCompanyName(employerName))));
 
         decimal? salMin = null, salMax = null;
         if (j.TryGetProperty("job_min_salary", out var sn) && sn.ValueKind == JsonValueKind.Number) salMin = sn.GetDecimal();

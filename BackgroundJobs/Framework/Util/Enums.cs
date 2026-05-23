@@ -22,7 +22,8 @@ public enum JobStatus
     InProcess = 1,
     Completed = 2,
     Failed = 3,
-    Cancelled = 4
+    Cancelled = 4,
+    Scheduled = 5
 }
 
 public enum LoginProvider
