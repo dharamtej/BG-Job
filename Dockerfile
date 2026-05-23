@@ -19,8 +19,7 @@ RUN dotnet publish CareerPandaWeb.csproj -c Release -o /app/publish /p:UseAppHos
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
-# Railway injects PORT; ASP.NET Core reads ASPNETCORE_URLS
-ENV ASPNETCORE_URLS=http://+:${PORT:-8080}
-
 COPY --from=build /app/publish .
-ENTRYPOINT ["dotnet", "CareerPanda.Web.dll"]
+
+# Shell-form CMD so $PORT is expanded at runtime from Railway's injected env var
+CMD ASPNETCORE_URLS=http://+:${PORT:-8080} dotnet CareerPanda.Web.dll

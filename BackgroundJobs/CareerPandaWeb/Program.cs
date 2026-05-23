@@ -102,11 +102,13 @@ if (config.CareerPandaSettingsConfig.DBProvider.Equals("PostgreSQL", StringCompa
 }
 
 // ── Hangfire — job scheduling ─────────────────────────────────────────────
+// Hangfire.PostgreSql requires key=value format; Railway provides a postgresql:// URI.
+var hangfireConnection = ToNpgsqlKeyValue(postgresConnection);
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
-    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(postgresConnection)));
+    .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(hangfireConnection)));
 builder.Services.AddHangfireServer(o => o.WorkerCount = 2);
 builder.Services.AddSingleton<JobSchedulerService>();
 
@@ -293,5 +295,23 @@ app.MapControllers().RequireRateLimiting("api");
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Converts postgresql://user:pass@host:port/db → Host=host;Port=port;Database=db;Username=user;Password=pass
+// Hangfire.PostgreSql's UseNpgsqlConnection rejects URI-format strings.
+static string ToNpgsqlKeyValue(string cs)
+{
+    if (!cs.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase) &&
+        !cs.StartsWith("postgres://",   StringComparison.OrdinalIgnoreCase))
+        return cs;
+
+    var uri      = new Uri(cs);
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var user     = Uri.UnescapeDataString(userInfo[0]);
+    var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
+    var database = uri.AbsolutePath.TrimStart('/');
+    var port     = uri.Port > 0 ? uri.Port : 5432;
+
+    return $"Host={uri.Host};Port={port};Database={database};Username={user};Password={password};SSL Mode=Prefer;Trust Server Certificate=true";
+}
 
 public partial class Program { }
