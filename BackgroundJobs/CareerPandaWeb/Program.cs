@@ -238,12 +238,6 @@ builder.Services.AddCors(options =>
             .AllowCredentials());
 });
 
-builder.Services.AddHsts(options =>
-{
-    options.MaxAge = TimeSpan.FromDays(365);
-    options.IncludeSubDomains = true;
-});
-
 var app = builder.Build();
 
 if (databaseLoggingEnabled)
@@ -277,11 +271,8 @@ using (var startupScope = app.Services.CreateScope())
 // ── Warm up H1B sponsor list in Redis on startup ───────────────────────────
 await app.Services.GetRequiredService<SponsorCacheWarmupService>().WarmUpAsync();
 
-if (!app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-    app.UseHsts();
-}
+// Railway terminates SSL at the proxy — container only receives plain HTTP on $PORT.
+// UseHttpsRedirection inside the container causes "failed to determine https port" and hangs requests.
 
 app.UseSwagger();
 app.UseSwaggerUI();
