@@ -103,7 +103,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             StartedAt        = DateTime.UtcNow,
             HoursBack        = input.HoursBack,
             MaxPages         = tags.Length,
-            LocationFilter   = "Remote (Global)",
+            LocationFilter   = "Remote (USA)",
             CreatedById      = request.UserId
         };
         await fetchDa.CreateFetchRunAsync(run);
@@ -189,7 +189,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         string tag, int hoursBack, string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
     {
         var client = _http.CreateClient("RemoteOK");
-        var url    = $"https://remoteok.com/api?tag={Uri.EscapeDataString(tag)}";
+        var url    = $"https://remoteok.com/api?tag={Uri.EscapeDataString(tag)}&location=USA";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         var res = await client.SendAsync(req, ct);
@@ -197,7 +197,6 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
 
         var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
 
-        // First element is metadata, skip it
         var cutoff = DateTime.UtcNow.AddHours(-hoursBack);
         var jobs   = new List<ApiRawJob>();
 
@@ -208,9 +207,12 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
 
             try
             {
+                // Post-filter: keep US location or empty location (remote = open to US applicants)
+                var location = item.TryGetProperty("location", out var loc) ? loc.GetString() ?? "" : "";
+                if (!IsUsOrRemoteLocation(location)) continue;
+
                 var job = MapJob(item, fetchRunId, sponsors);
 
-                // Filter by HoursBack if post date available
                 if (job.PostDate.HasValue && job.PostDate.Value < cutoff) continue;
 
                 jobs.Add(job);
@@ -221,6 +223,54 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         return jobs;
     }
 
+    private static readonly HashSet<string> UsStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+        "VA","WA","WV","WI","WY","DC"
+    };
+
+    private static readonly string[] NonUsKeywords =
+    [
+        "CANADA", "UK", "UNITED KINGDOM", "GERMANY", "INDIA", "MEXICO",
+        "AUSTRALIA", "FRANCE", "SPAIN", "NETHERLANDS", "BRAZIL", "ARGENTINA",
+        "COLOMBIA", "PHILIPPINES", "PAKISTAN", "UKRAINE", "POLAND", "ROMANIA",
+        "PORTUGAL", "ITALY", "SINGAPORE", "JAPAN", "CHINA", "NIGERIA", "KENYA"
+    ];
+
+    private static bool IsUsOrRemoteLocation(string location)
+    {
+        if (string.IsNullOrWhiteSpace(location)) return true;
+
+        var loc = location.ToUpperInvariant();
+
+        if (loc.Contains("USA") || loc.Contains("UNITED STATES") || loc.Contains("U.S.A")) return true;
+
+        var parts = loc.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2 && UsStates.Contains(parts[^1])) return true;
+
+        if (NonUsKeywords.Any(k => loc.Contains(k))) return false;
+
+        return true;
+    }
+
+    private static (string? city, string? state, string? country) ParseUsLocation(string location)
+    {
+        if (string.IsNullOrWhiteSpace(location)) return (null, null, null);
+
+        var parts = location.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length >= 2 && UsStates.Contains(parts[^1].ToUpperInvariant()))
+            return (parts[0], parts[^1].ToUpperInvariant(), "US");
+
+        if (location.Contains("USA", StringComparison.OrdinalIgnoreCase) ||
+            location.Contains("United States", StringComparison.OrdinalIgnoreCase))
+            return (null, null, "US");
+
+        return (null, null, null);
+    }
+
     private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)
     {
         var title       = j.TryGetProperty("position",    out var t)   ? t.GetString()   : "Untitled";
@@ -229,8 +279,9 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         var applyUrl    = j.TryGetProperty("apply_url",   out var au)  ? au.GetString()  : null;
         var jobUrl      = j.TryGetProperty("url",         out var u)   ? u.GetString()   : null;
         var sourceId    = j.TryGetProperty("id",          out var id)  ? id.GetString()  : null;
-        var logoUrl     = j.TryGetProperty("company_logo",out var lg)  ? lg.GetString()  : null;
-        var location    = j.TryGetProperty("location",    out var lo)  ? lo.GetString()  : "Remote";
+        var logoRaw     = j.TryGetProperty("company_logo",out var lg)  ? lg.GetString()  : null;
+        var logoUrl     = string.IsNullOrWhiteSpace(logoRaw) ? null : logoRaw; // API returns "" when no logo
+        var locationRaw = j.TryGetProperty("location",    out var lo)  ? lo.GetString() ?? "" : "";
 
         // Parse post date from epoch
         DateTime? postDate = null;
@@ -242,27 +293,74 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         if (j.TryGetProperty("salary_min", out var sn) && sn.ValueKind == JsonValueKind.Number && sn.GetDecimal() > 0) salMin = sn.GetDecimal();
         if (j.TryGetProperty("salary_max", out var sx) && sx.ValueKind == JsonValueKind.Number && sx.GetDecimal() > 0) salMax = sx.GetDecimal();
 
-        // Parse tags array
+        // Parse tags array — RemoteOK uses tags for skills, role level, and job type
         string[]? tags = null;
         if (j.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Array)
             tags = tg.EnumerateArray().Select(x => x.GetString()!).Where(x => x != null).ToArray();
 
+        // Extract job level from tags
+        string? jobLevel = null;
+        if (tags != null)
+        {
+            if (tags.Any(x => x.Equals("senior", StringComparison.OrdinalIgnoreCase) || x.Equals("lead", StringComparison.OrdinalIgnoreCase)))
+                jobLevel = "Senior";
+            else if (tags.Any(x => x.Equals("junior", StringComparison.OrdinalIgnoreCase) || x.Equals("entry", StringComparison.OrdinalIgnoreCase)))
+                jobLevel = "Junior";
+            else if (tags.Any(x => x.Equals("internship", StringComparison.OrdinalIgnoreCase) || x.Equals("intern", StringComparison.OrdinalIgnoreCase)))
+                jobLevel = "Internship";
+            else if (tags.Any(x => x.Equals("exec", StringComparison.OrdinalIgnoreCase) || x.Equals("cto", StringComparison.OrdinalIgnoreCase) || x.Equals("cfo", StringComparison.OrdinalIgnoreCase)))
+                jobLevel = "Executive";
+        }
+
+        // Extract contract type from tags
+        string? contractType = null;
+        if (tags != null)
+        {
+            if (tags.Any(x => x.Equals("contract", StringComparison.OrdinalIgnoreCase))) contractType = "Contract";
+            else if (tags.Any(x => x.Equals("freelance", StringComparison.OrdinalIgnoreCase))) contractType = "Freelance";
+            else if (tags.Any(x => x.Equals("part-time", StringComparison.OrdinalIgnoreCase))) contractType = "Part-time";
+            else if (tags.Any(x => x.Equals("internship", StringComparison.OrdinalIgnoreCase))) contractType = "Internship";
+        }
+
+        // Parse city/state/country from location string
+        var (city, state, country) = ParseUsLocation(locationRaw);
+
         // ── Flag detection ────────────────────────────────────────────────────
-        var isH1B         = ContainsAny(desc, "h1b", "h-1b", "visa sponsor", "will sponsor") ||
+        // H1B: affirmative phrases only; suppress on explicit negations (same pattern as Jobicy)
+        var h1bKeywordHit = ContainsAny(desc, "h1b", "h-1b", "will sponsor visa", "visa sponsorship available",
+                                "h1b sponsorship", "h1b transfer");
+        var h1bNegation   = ContainsAny(desc, "no visa sponsor", "not sponsor", "unable to sponsor",
+                                "cannot sponsor", "no sponsorship", "sponsorship not available",
+                                "do not sponsor", "does not sponsor");
+        var isH1B         = (h1bKeywordHit && !h1bNegation) ||
                             (companyName != null && sponsors.Contains(companyName));
-        var isContract    = ContainsAny(desc, "contract", "contractor") ||
-                            (tags?.Any(x => x.Contains("contract", StringComparison.OrdinalIgnoreCase)) == true);
-        var isC2C         = ContainsAny(desc, "c2c", "corp to corp", "corp-to-corp");
-        var isW2          = ContainsAny(desc, "w2", "w-2");
-        var isFreelance   = ContainsAny(desc, "1099", "freelance", "independent contractor");
+
+        // Contract: specific job-context phrases; plain "contract" too broad
+        var isContract    = ContainsAny(desc, "contract position", "contract role", "contract to hire",
+                                "contract-to-hire", "c2h", "contract opportunity", "contract assignment",
+                                "contract work", "contract employee") ||
+                            (tags?.Any(x => x.Equals("contract", StringComparison.OrdinalIgnoreCase)) == true);
+
+        // C2C / W2 / PrimeVendor: valid for US remote jobs on RemoteOK
+        var isC2C         = ContainsAny(desc, "c2c", "corp to corp", "corp-to-corp", "corp2corp");
+        var isW2          = ContainsAny(desc, "w2 only", "w-2 only", "w2 employment", "on w2");
         var isPrimeVendor = ContainsAny(desc, "prime vendor", "direct client", "end client");
-        var isStaffing    = ContainsAny(desc, "staffing", "recruiting firm") ||
-                            ContainsAny(companyName, "staffing", "consulting", "solutions");
-        var isUniversity  = ContainsAny(companyName, "university", "college", "institute", "academia") ||
-                            ContainsAny(desc, "university", "academic", "faculty");
-        var isStartup     = ContainsAny(desc, "startup", "start-up", "series a", "series b", "seed", "venture") ||
+
+        var isFreelance   = ContainsAny(desc, "1099", "freelance", "independent contractor");
+
+        // Staffing: company name only — remove "consulting"/"solutions" (too broad, matches Google, Microsoft etc.)
+        var isStaffing    = ContainsAny(companyName, "staffing", "recruitment", "manpower");
+
+        // University: company name only (description check causes false positives like ManTech)
+        var isUniversity  = ContainsAny(companyName, "university", "college", "institute", "academia");
+
+        // Startup: require funding-context phrases; bare "seed"/"venture" too broad (same as Jobicy)
+        var isStartup     = ContainsAny(desc, "startup", "start-up", "series a", "series b", "series c",
+                                "seed round", "seed funding", "pre-seed", "venture-backed", "vc-backed") ||
                             ContainsAny(companyName, "startup", "start-up");
-        var isNonProfit   = ContainsAny(desc, "nonprofit", "non-profit", "501(c)", "501c3", "ngo") ||
+
+        var isNonProfit   = ContainsAny(desc, "nonprofit", "non-profit", "501(c)", "501c3", "ngo",
+                                "not-for-profit") ||
                             ContainsAny(companyName, "foundation", "nonprofit", "non-profit");
 
         return new ApiRawJob
@@ -274,10 +372,9 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             JobTitle          = title ?? "Untitled",
             JobLink           = applyUrl ?? jobUrl,
             JobDescription    = desc,
-            City              = null,
-            State             = null,
-            Country           = location.Contains("USA", StringComparison.OrdinalIgnoreCase) ||
-                                 location.Contains("US only", StringComparison.OrdinalIgnoreCase) ? "US" : null,
+            City              = city,
+            State             = state,
+            Country           = country,
             PostDate          = postDate,
             HoursBackPosted   = ParseHoursBack(postDate),
             SalaryMin         = salMin,
@@ -286,12 +383,14 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             SalaryCurrency    = "USD",
             WorkType          = "Remote",
             JobWorkMode       = "Remote",
+            JobLevel          = jobLevel,
+            ContractType      = contractType,
             CompanyName       = companyName,
             CompanyLogoUrl    = logoUrl,
             Skills            = tags,
             // ── All flags ─────────────────────────────────────────────────────
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B || ContainsAny(desc, "sponsor", "visa"),
+            IsSponsored       = isH1B,
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,
