@@ -282,18 +282,19 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         if (string.IsNullOrWhiteSpace(rawIndustry)) return null;
 
-        // Take first entry from comma-separated list (e.g. "software-dev, marketing" → "software-dev")
+        // Take first entry from comma-separated list (e.g. "Software Engineering, Data Science" → "Software Engineering")
         var first = rawIndustry.Split(',')[0].Trim();
         if (string.IsNullOrWhiteSpace(first)) return null;
 
-        // Normalize to slug: lowercase, spaces → hyphens
-        var slug = first.ToLowerInvariant().Replace(' ', '-');
+        var firstLower = first.ToLowerInvariant();
+        // Normalize to slug: lowercase, spaces → hyphens (e.g. "Software Engineering" → "software-engineering")
+        var slug = firstLower.Replace(' ', '-');
 
-        // 1. Process-level cache hit (includes negative hits stored as 0)
+        // 1. Process-level cache hit (0 = confirmed miss)
         if (_industryCache.TryGetValue(slug, out var cachedId))
             return cachedId == 0 ? null : cachedId;
 
-        // 2. Exact slug match
+        // 2. Exact slug match (works when input is already a slug like "software-engineering")
         var bySlug = await _db.Industries
             .FirstOrDefaultAsync(i => i.Slug == slug && i.IsActive, ct);
         if (bySlug != null)
@@ -302,17 +303,16 @@ public class JobFetchDAPostgres : IJobFetchDA
             return (int)bySlug.Id;
         }
 
-        // 3. Normalized name match: "software-dev" → "software dev"
-        var nameVariant = slug.Replace('-', ' ');
+        // 3. Exact name match — Jobicy jobIndustry[] returns names ("Software Engineering"), not slugs
         var byName = await _db.Industries
-            .FirstOrDefaultAsync(i => i.IsActive && i.Name.ToLower() == nameVariant, ct);
+            .FirstOrDefaultAsync(i => i.IsActive && i.Name.ToLower() == firstLower, ct);
         if (byName != null)
         {
             _industryCache[slug] = (int)byName.Id;
             return (int)byName.Id;
         }
 
-        // No match — cache the miss so we don't query again this process lifetime
+        // No match — cache the miss
         _industryCache[slug] = 0;
         return null;
     }
