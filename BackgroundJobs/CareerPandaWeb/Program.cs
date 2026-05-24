@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using CareerPanda.BL.Background;
 using CareerPanda.BL.Background.Handlers;
 using Hangfire;
+using Hangfire.Dashboard;
 using Hangfire.PostgreSql;
 using CareerPanda.BL.Logic;
 using CareerPanda.BL.Services;
@@ -278,11 +279,8 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseRateLimiter();
@@ -290,7 +288,10 @@ app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.UseHangfireDashboard("/hangfire");
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new IDashboardAuthorizationFilter[0]
+});
 app.MapControllers().RequireRateLimiting("api");
 app.MapHealthChecks("/health");
 
