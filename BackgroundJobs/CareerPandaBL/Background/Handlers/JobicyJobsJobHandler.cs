@@ -264,17 +264,37 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             else country = geoRaw;
         }
 
-        var isH1B         = ContainsAny(fullText, "h1b", "h-1b", "visa sponsor", "will sponsor") ||
+        // H1B: affirmative phrases only; suppress on explicit negations
+        var h1bKeywordHit = ContainsAny(fullText, "h1b", "h-1b", "will sponsor visa", "visa sponsorship available",
+                                "h1b sponsorship", "h1b transfer");
+        var h1bNegation   = ContainsAny(fullText, "no visa sponsor", "not sponsor", "unable to sponsor",
+                                "cannot sponsor", "no sponsorship", "sponsorship not available",
+                                "do not sponsor", "does not sponsor");
+        var isH1B         = (h1bKeywordHit && !h1bNegation) ||
                             (companyName != null && sponsors.Contains(companyName));
-        const bool isContract    = false; // Jobicy is a remote-only board — not a contract/staffing board
-        const bool isC2C         = false;
-        const bool isW2          = false;
-        const bool isFreelance   = false;
-        const bool isPrimeVendor = false;
-        const bool isStaffing    = false;
-        const bool isUniversity  = false;
-        const bool isStartup     = false;
-        const bool isNonProfit   = false;
+
+        // Contract / Freelance: driven by Jobicy's jobType[] field — most accurate signal available
+        var isContract    = contractType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true;
+        var isFreelance   = contractType?.Contains("freelance", StringComparison.OrdinalIgnoreCase) == true;
+
+        // C2C / PrimeVendor / W2: US staffing-market terms not typical of Jobicy direct-employer posts
+        var isC2C         = false;
+        var isPrimeVendor = false;
+        var isW2          = false;
+
+        // Staffing: company name only — description check prone to false positives on Jobicy
+        var isStaffing    = ContainsAny(companyName, "staffing", "recruitment", "manpower");
+
+        var isUniversity  = ContainsAny(companyName, "university", "college", "institute", "academia");
+
+        // Startup: require funding-context phrases; "seed" / "venture" alone are too broad
+        var isStartup     = ContainsAny(fullText, "startup", "start-up", "series a", "series b", "series c",
+                                "seed round", "seed funding", "pre-seed", "venture-backed", "vc-backed") ||
+                            ContainsAny(companyName, "startup", "start-up");
+
+        var isNonProfit   = ContainsAny(fullText, "nonprofit", "non-profit", "501(c)", "501c3", "ngo",
+                                "not-for-profit") ||
+                            ContainsAny(companyName, "foundation", "nonprofit", "non-profit");
 
         return new ApiRawJob
         {
@@ -304,7 +324,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             CompanyLogoUrl    = logoUrl,
             Skills            = skills,
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B,
+            IsSponsored       = isH1B || ContainsAny(fullText, "sponsor", "visa"),
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,
