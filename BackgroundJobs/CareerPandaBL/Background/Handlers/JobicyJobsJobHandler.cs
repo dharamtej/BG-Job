@@ -4,10 +4,10 @@
 // TERMS  : Attribution appreciated; link back to jobicy.com in UI.
 //
 // STRATEGY
-// Jobicy exposes a remote-jobs endpoint filterable by industry slug.
-// Max 50 results per call, no pagination — we loop all industry slugs.
+// On startup fetch all industries and locations dynamically from Jobicy API.
+// Loop: for each geo × each industry → fetch count=100 (Jobicy max per call, no pagination).
+// Duplicates across geo×industry combos are deduped by SourceId at DB upsert time.
 // Every job is remote-only (WorkType/JobWorkMode = "Remote" always).
-// All flags (H1B, Contract, C2C, W2, Startup, NonProfit, etc.) evaluated at insert time.
 using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
@@ -24,32 +24,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
     protected override string JobCategory => "JobicyJobs";
     protected override string ApiSource   => "Jobicy";
 
-    protected override int InterPageDelayMs => 2000; // be polite — free public API
-
-    // Jobicy industry slugs — maps to ?industry={slug}
-    private static readonly string[] JobicyIndustries =
-    [
-        "programming",
-        "devops-sysadmin",
-        "design-ui-ux",
-        "content-writing",
-        "customer-support",
-        "finance-legal",
-        "human-resources",
-        "marketing",
-        "product-management",
-        "project-management",
-        "sales",
-        "software-testing",
-        "web-design",
-        "web-development",
-        "business-management",
-        "data-science",
-        "machine-learning",
-        "cybersecurity",
-        "blockchain",
-        "healthcare"
-    ];
+    protected override int InterPageDelayMs => 1500;
 
     private const string SponsorsCacheKey = "h1b:sponsors:names";
     private static readonly TimeSpan SponsorsCacheTtl = TimeSpan.FromHours(24);
@@ -73,8 +48,6 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         _cache        = cacheService;
     }
 
-    // ── Override: loop all Jobicy industry slugs ─────────────────────────────
-
     public override async Task ExecuteAsync(
         JobWorkRequest request,
         IJobProgressReporter progress,
@@ -82,13 +55,27 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
     {
         var input    = ParseInput(request.InputPayload);
         var sponsors = await LoadSponsorsAsync(cancellationToken);
+        var client   = _http.CreateClient("Jobicy");
 
-        // If specific industry passed via SearchQuery use it; otherwise all industries
-        var industries = input.SearchQuery != null
-            ? [input.SearchQuery]
-            : JobicyIndustries;
+        // ── Load industries and geos once for the entire job ─────────────────
+        await progress.ReportProgressAsync(2, "Loading Jobicy industries and locations...");
 
-        using var scope   = _scopeFactory.CreateScope();
+        var industries = await FetchMetaAsync(client, "industries", "industrySlug", cancellationToken);
+
+        // TODO: expand to all geos once validated — fetch with: FetchMetaAsync(client, "locations", "geoSlug", cancellationToken)
+        var geos = new List<string> { "usa" };
+
+        Logger.LogInformation("[Jobicy] Loaded {I} industries, geo restricted to: {G}", industries.Count, string.Join(", ", geos));
+
+        if (industries.Count == 0)
+        {
+            Logger.LogError("[Jobicy] Failed to load industries — aborting");
+            throw new InvalidOperationException("Jobicy meta fetch returned empty industries.");
+        }
+
+        int totalCombos = industries.Count * geos.Count;
+
+        using var scope = _scopeFactory.CreateScope();
         var fetchDa = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
         var run = new ApiJobFetchRun
@@ -100,64 +87,88 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             Status           = "Running",
             StartedAt        = DateTime.UtcNow,
             HoursBack        = input.HoursBack,
-            MaxPages         = industries.Length,
+            MaxPages         = totalCombos,
             LocationFilter   = "Remote (Global)",
             CreatedById      = request.UserId
         };
         await fetchDa.CreateFetchRunAsync(run);
 
-        Logger.LogInformation("[Jobicy] Starting — {N} industries to fetch", industries.Length);
+        Logger.LogInformation("[Jobicy] Starting — {G} geos × {I} industries = {T} combos",
+            geos.Count, industries.Count, totalCombos);
 
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0,
-            totalSkipped = 0, totalErrors = 0, pagesFetched = 0;
+            totalSkipped = 0, totalErrors = 0, combosDone = 0;
+
+        var cutoff = DateTime.UtcNow.AddHours(-input.HoursBack);
 
         try
         {
-            for (int i = 0; i < industries.Length; i++)
+            foreach (var geo in geos)
             {
-                if (cancellationToken.IsCancellationRequested) break;
-
-                var industry = industries[i];
-                Logger.LogInformation("[Jobicy] Industry {I}/{N}: '{Ind}'", i + 1, industries.Length, industry);
-
-                List<ApiRawJob> jobs;
-                try
+                foreach (var industry in industries)
                 {
-                    jobs = await FetchIndustryAsync(industry, input.HoursBack, run.Id, sponsors, cancellationToken);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    Logger.LogError(ex, "[Jobicy] Fetch failed for industry '{Ind}'", industry);
-                    totalErrors++;
-                    continue;
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                if (jobs.Count == 0)
-                {
-                    Logger.LogInformation("[Jobicy] No results for industry '{Ind}'", industry);
+                    var url = $"https://jobicy.com/api/v2/remote-jobs?count=100" +
+                              $"&geo={Uri.EscapeDataString(geo)}" +
+                              $"&industry={Uri.EscapeDataString(industry)}";
+
+                    Logger.LogInformation("[Jobicy] [{Done}/{Total}] geo='{G}' industry='{I}'",
+                        combosDone + 1, totalCombos, geo, industry);
+
+                    List<ApiRawJob> jobs = [];
+                    try
+                    {
+                        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                        var res = await client.SendAsync(req, cancellationToken);
+                        res.EnsureSuccessStatusCode();
+
+                        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+
+                        if (json.TryGetProperty("jobs", out var jobsArray) &&
+                            jobsArray.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var item in jobsArray.EnumerateArray())
+                            {
+                                try
+                                {
+                                    var job = MapJob(item, run.Id, sponsors);
+                                    if (job.PostDate.HasValue && job.PostDate.Value < cutoff) continue;
+                                    jobs.Add(job);
+                                }
+                                catch (Exception ex) { Logger.LogWarning(ex, "[Jobicy] Map failed"); }
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "[Jobicy] Failed geo='{G}' industry='{I}'", geo, industry);
+                        totalErrors++;
+                    }
+
+                    combosDone++;
+
+                    if (jobs.Count > 0)
+                    {
+                        totalFetched += jobs.Count;
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        totalInserted += ins;
+                        totalUpdated  += upd;
+                        totalErrors   += err;
+                        totalSkipped  += jobs.Count - ins - upd - err;
+
+                        await fetchDa.UpdateFetchRunStatsAsync(
+                            run.Id, totalFetched, totalInserted, totalUpdated,
+                            totalSkipped, totalErrors, combosDone);
+                    }
+
+                    int pct = Math.Min(95, (int)((double)combosDone / totalCombos * 95));
+                    await progress.ReportProgressAsync(pct,
+                        $"[{combosDone}/{totalCombos}] geo='{geo}' industry='{industry}' — Inserted: {totalInserted}");
+
                     await Task.Delay(InterPageDelayMs, cancellationToken);
-                    continue;
                 }
-
-                pagesFetched++;
-                totalFetched += jobs.Count;
-
-                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
-                totalInserted += ins;
-                totalUpdated  += upd;
-                totalErrors   += err;
-                totalSkipped  += jobs.Count - ins - upd - err;
-
-                await fetchDa.UpdateFetchRunStatsAsync(
-                    run.Id, totalFetched, totalInserted, totalUpdated,
-                    totalSkipped, totalErrors, pagesFetched);
-
-                int pct = (int)((double)(i + 1) / industries.Length * 90);
-                await progress.ReportProgressAsync(pct,
-                    $"[{i + 1}/{industries.Length}] '{industry}' — Inserted: {totalInserted}, Updated: {totalUpdated}");
-
-                await Task.Delay(InterPageDelayMs, cancellationToken);
             }
 
             await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
@@ -174,91 +185,86 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         }
 
         Logger.LogInformation(
-            "[Jobicy] Done — Industries={N} Fetched={F} Inserted={I} Updated={U} Errors={E}",
-            industries.Length, totalFetched, totalInserted, totalUpdated, totalErrors);
+            "[Jobicy] Done — Combos={C} Fetched={F} Inserted={I} Updated={U} Skipped={S} Errors={E}",
+            combosDone, totalFetched, totalInserted, totalUpdated, totalSkipped, totalErrors);
 
         await progress.ReportProgressAsync(100,
-            $"Done — {industries.Length} industries, Inserted: {totalInserted}, Updated: {totalUpdated}");
+            $"Done — {combosDone} combos, Fetched: {totalFetched}, Inserted: {totalInserted}, Updated: {totalUpdated}");
     }
 
-    // ── Jobicy API fetch ──────────────────────────────────────────────────────
+    // ── Fetch meta list (industries or locations) from Jobicy ─────────────────
 
-    private async Task<List<ApiRawJob>> FetchIndustryAsync(
-        string industry, int hoursBack, string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
+    private async Task<List<string>> FetchMetaAsync(
+        HttpClient client, string getParam, string slugField, CancellationToken ct)
     {
-        var client = _http.CreateClient("Jobicy");
-        var url    = $"https://jobicy.com/api/v2/remote-jobs?count=50&industry={Uri.EscapeDataString(industry)}";
-
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        var res = await client.SendAsync(req, ct);
-        res.EnsureSuccessStatusCode();
-
-        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-
-        if (!json.TryGetProperty("jobs", out var jobsArray) ||
-            jobsArray.ValueKind != JsonValueKind.Array)
-            return [];
-
-        var cutoff = DateTime.UtcNow.AddHours(-hoursBack);
-        var jobs   = new List<ApiRawJob>();
-
-        foreach (var item in jobsArray.EnumerateArray())
+        try
         {
-            try
-            {
-                var job = MapJob(item, fetchRunId, sponsors);
+            var url = $"https://jobicy.com/api/v2/remote-jobs?get={getParam}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            var res = await client.SendAsync(req, ct);
+            res.EnsureSuccessStatusCode();
 
-                if (job.PostDate.HasValue && job.PostDate.Value < cutoff) continue;
+            var json  = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var key   = getParam == "industries" ? "industries" : "locations";
 
-                jobs.Add(job);
-            }
-            catch (Exception ex) { Logger.LogWarning(ex, "[Jobicy] Map failed for item"); }
+            if (!json.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return [];
+
+            return arr.EnumerateArray()
+                .Where(x => x.TryGetProperty(slugField, out _))
+                .Select(x => x.GetProperty(slugField).GetString()!)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToList();
         }
-
-        return jobs;
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[Jobicy] Failed to fetch meta '{Param}'", getParam);
+            return [];
+        }
     }
+
+    // ── Job mapping ───────────────────────────────────────────────────────────
 
     private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)
     {
-        var sourceId    = j.TryGetProperty("id",          out var id)  ? id.GetRawText()   : null;
-        var title       = j.TryGetProperty("jobTitle",    out var t)   ? t.GetString()     : "Untitled";
-        var companyName = j.TryGetProperty("companyName", out var co)  ? co.GetString()    : null;
-        var desc        = j.TryGetProperty("jobDescription", out var d) ? d.GetString()    : null;
-        var excerpt     = j.TryGetProperty("jobExcerpt",  out var ex)  ? ex.GetString()    : null;
-        var applyUrl    = j.TryGetProperty("url",         out var u)   ? u.GetString()     : null;
-        var logoUrl     = j.TryGetProperty("companyLogo", out var lg)  ? lg.GetString()    : null;
-        var geoRaw      = j.TryGetProperty("jobGeo",      out var geo) ? geo.GetString()   : null;
-        var levelRaw    = j.TryGetProperty("jobLevel",    out var lv)  ? lv.GetString()    : null;
-        var pubDateStr  = j.TryGetProperty("pubDate",     out var pd)  ? pd.GetString()    : null;
+        var sourceId    = j.TryGetProperty("id",             out var id)  ? id.GetRawText()  : null;
+        var title       = j.TryGetProperty("jobTitle",       out var t)   ? t.GetString()    : "Untitled";
+        var companyName = j.TryGetProperty("companyName",    out var co)  ? co.GetString()   : null;
+        var desc        = j.TryGetProperty("jobDescription", out var d)   ? d.GetString()    : null;
+        var excerpt     = j.TryGetProperty("jobExcerpt",     out var ex)  ? ex.GetString()   : null;
+        var applyUrl    = j.TryGetProperty("url",            out var u)   ? u.GetString()    : null;
+        var logoUrl     = j.TryGetProperty("companyLogo",    out var lg)  ? lg.GetString()   : null;
+        var geoRaw      = j.TryGetProperty("jobGeo",         out var geo) ? geo.GetString()  : null;
+        var pubDateStr  = j.TryGetProperty("pubDate",        out var pd)  ? pd.GetString()   : null;
+        var jobLevel    = j.TryGetProperty("jobLevel",       out var jl)  ? jl.GetString()   : null;
+        var salaryPeriod = j.TryGetProperty("salaryPeriod",  out var sp)  ? sp.GetString()   : null;
 
-        // Merge description + excerpt for flag detection
         var fullText = string.Concat(desc, " ", excerpt);
 
-        // Parse publish date
         DateTime? postDate = null;
         if (pubDateStr != null && DateTime.TryParse(pubDateStr, out var dt))
             postDate = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
 
-        // Parse salary
         decimal? salMin = null, salMax = null;
-        if (j.TryGetProperty("annualSalaryMin", out var sn) && sn.ValueKind == JsonValueKind.Number && sn.GetDecimal() > 0) salMin = sn.GetDecimal();
-        if (j.TryGetProperty("annualSalaryMax", out var sx) && sx.ValueKind == JsonValueKind.Number && sx.GetDecimal() > 0) salMax = sx.GetDecimal();
+        if (j.TryGetProperty("salaryMin", out var sn) && sn.ValueKind == JsonValueKind.Number && sn.GetDecimal() > 0) salMin = sn.GetDecimal();
+        if (j.TryGetProperty("salaryMax", out var sx) && sx.ValueKind == JsonValueKind.Number && sx.GetDecimal() > 0) salMax = sx.GetDecimal();
         var salaryCurrency = j.TryGetProperty("salaryCurrency", out var sc) ? sc.GetString() ?? "USD" : "USD";
 
-        // Parse jobType array → WorkType string
-        string? workType = null;
+        string? contractType = null;
         if (j.TryGetProperty("jobType", out var jt) && jt.ValueKind == JsonValueKind.Array)
         {
             var types = jt.EnumerateArray().Select(x => x.GetString()).Where(x => x != null).ToArray();
-            workType = types.Length > 0 ? string.Join(", ", types) : null;
+            contractType = types.Length > 0 ? string.Join(", ", types) : null;
         }
 
-        // Parse jobIndustry array → Skills
         string[]? skills = null;
+        string? industryText = null;
         if (j.TryGetProperty("jobIndustry", out var ji) && ji.ValueKind == JsonValueKind.Array)
+        {
             skills = ji.EnumerateArray().Select(x => x.GetString()!).Where(x => x != null).ToArray();
+            industryText = skills.Length > 0 ? string.Join(", ", skills) : null;
+        }
 
-        // Country from geo
         string? country = null;
         if (geoRaw != null)
         {
@@ -268,15 +274,14 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             else country = geoRaw;
         }
 
-        // ── Flag detection ────────────────────────────────────────────────────
         var isH1B         = ContainsAny(fullText, "h1b", "h-1b", "visa sponsor", "will sponsor") ||
                             (companyName != null && sponsors.Contains(companyName));
         var isContract    = ContainsAny(fullText, "contract", "contractor") ||
-                            (workType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true);
+                            (contractType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true);
         var isC2C         = ContainsAny(fullText, "c2c", "corp to corp", "corp-to-corp");
         var isW2          = ContainsAny(fullText, "w2", "w-2");
         var isFreelance   = ContainsAny(fullText, "1099", "freelance", "independent contractor") ||
-                            (workType?.Contains("freelance", StringComparison.OrdinalIgnoreCase) == true);
+                            (contractType?.Contains("freelance", StringComparison.OrdinalIgnoreCase) == true);
         var isPrimeVendor = ContainsAny(fullText, "prime vendor", "direct client", "end client");
         var isStaffing    = ContainsAny(fullText, "staffing", "recruiting firm") ||
                             ContainsAny(companyName, "staffing", "consulting", "solutions");
@@ -305,12 +310,15 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             SalaryMax         = salMax,
             SalaryRangeText   = salMin.HasValue && salMax.HasValue ? $"${salMin:N0}–${salMax:N0}/yr" : null,
             SalaryCurrency    = salaryCurrency,
+            SalaryType        = salaryPeriod,
             WorkType          = "Remote",
             JobWorkMode       = "Remote",
+            ContractType      = contractType,
+            JobLevel          = jobLevel,
+            Industry          = industryText,
             CompanyName       = companyName,
             CompanyLogoUrl    = logoUrl,
             Skills            = skills,
-            // ── All flags ─────────────────────────────────────────────────────
             IsH1BSponsored    = isH1B,
             IsSponsored       = isH1B || ContainsAny(fullText, "sponsor", "visa"),
             IsContractJob     = isContract,
@@ -363,6 +371,5 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
     // Required by base class — not used (ExecuteAsync fully overridden)
     protected override Task<List<ApiRawJob>> FetchPageAsync(
         int page, JobFetchInput input, string fetchRunId, CancellationToken ct) =>
-        FetchIndustryAsync(input.SearchQuery ?? "programming", input.HoursBack, fetchRunId,
-            LoadSponsorsAsync(ct).GetAwaiter().GetResult(), ct);
+        Task.FromResult(new List<ApiRawJob>());
 }
