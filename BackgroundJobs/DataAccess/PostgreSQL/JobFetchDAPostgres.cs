@@ -1,8 +1,6 @@
 // DataAccess/PostgreSQL/JobFetchDAPostgres.cs
-using System.Collections.Concurrent;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
-using CareerPanda.DataAccess.Entities.Md;
 using CareerPanda.Framework;
 using CareerPanda.Framework.Util;
 using Microsoft.EntityFrameworkCore;
@@ -14,11 +12,6 @@ public class JobFetchDAPostgres : IJobFetchDA
 {
     private readonly CareerPandaDbContext _db;
     private readonly ILogger<JobFetchDAPostgres> _logger;
-
-    // Process-level cache: normalized slug → industry id
-    // md.industries is a small, stable table — cache avoids a DB round-trip per job
-    private static readonly ConcurrentDictionary<string, int> _industryCache =
-        new(StringComparer.OrdinalIgnoreCase);
 
     public JobFetchDAPostgres(CareerPandaDbContext db, ILogger<JobFetchDAPostgres> logger)
     {
@@ -163,10 +156,6 @@ public class JobFetchDAPostgres : IJobFetchDA
         // Resolve (or create) the company first so OurCompanyId is set before save.
         job.OurCompanyId = await ResolveOrCreateCompanyAsync(job);
 
-        // Resolve industry against md.industries master data
-        if (job.IndustryId == null && !string.IsNullOrWhiteSpace(job.Industry))
-            job.IndustryId = await ResolveIndustryAsync(job.Industry);
-
         // Lookup key: job_link (canonical apply URL).
         // Falls back to source + source_id if no URL.
         ApiRawJob? existing = null;
@@ -269,52 +258,7 @@ public class JobFetchDAPostgres : IJobFetchDA
         if (string.IsNullOrWhiteSpace(company.Website)      && !string.IsNullOrWhiteSpace(job.CompanyUrl))     company.Website      = job.CompanyUrl;
         if (string.IsNullOrWhiteSpace(company.CompanyType)  && !string.IsNullOrWhiteSpace(job.CompanyType))    company.CompanyType  = job.CompanyType;
         if (string.IsNullOrWhiteSpace(company.ApiCompanyId) && !string.IsNullOrWhiteSpace(job.ApiCompanyId))   company.ApiCompanyId = job.ApiCompanyId;
-        if (company.IndustryId == null                      && job.IndustryId != null)                         company.IndustryId   = job.IndustryId;
         company.UpdatedOn = DateTime.UtcNow;
-    }
-
-    // ── Industry resolution ───────────────────────────────────────────────────
-    // Lookup-only against md.industries — never auto-insert.
-    // Master data must be curated manually; different APIs use different naming
-    // for the same industry, so auto-insert would pollute the table with duplicates.
-
-    private async Task<int?> ResolveIndustryAsync(string? rawIndustry, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(rawIndustry)) return null;
-
-        // Take first entry from comma-separated list (e.g. "Software Engineering, Data Science" → "Software Engineering")
-        var first = rawIndustry.Split(',')[0].Trim();
-        if (string.IsNullOrWhiteSpace(first)) return null;
-
-        var firstLower = first.ToLowerInvariant();
-        // Normalize to slug: lowercase, spaces → hyphens (e.g. "Software Engineering" → "software-engineering")
-        var slug = firstLower.Replace(' ', '-');
-
-        // 1. Process-level cache hit (0 = confirmed miss)
-        if (_industryCache.TryGetValue(slug, out var cachedId))
-            return cachedId == 0 ? null : cachedId;
-
-        // 2. Exact slug match (works when input is already a slug like "software-engineering")
-        var bySlug = await _db.Industries
-            .FirstOrDefaultAsync(i => i.Slug == slug && i.IsActive, ct);
-        if (bySlug != null)
-        {
-            _industryCache[slug] = (int)bySlug.Id;
-            return (int)bySlug.Id;
-        }
-
-        // 3. Exact name match — Jobicy jobIndustry[] returns names ("Software Engineering"), not slugs
-        var byName = await _db.Industries
-            .FirstOrDefaultAsync(i => i.IsActive && i.Name.ToLower() == firstLower, ct);
-        if (byName != null)
-        {
-            _industryCache[slug] = (int)byName.Id;
-            return (int)byName.Id;
-        }
-
-        // No match — cache the miss
-        _industryCache[slug] = 0;
-        return null;
     }
 
     public async Task<(int inserted, int updated, int errors)> BulkUpsertRawJobsAsync(
