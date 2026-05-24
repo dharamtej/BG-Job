@@ -249,7 +249,7 @@ public class JobController : CoreController
         {
             Name        = "Fetch US Federal Government Jobs (USAJobs.gov)",
             JobType     = "GovernmentJobs",
-            Description = """{"SearchQuery":"software engineer","MaxPages":10}"""
+            Description = """{"MaxPages":500}"""
         },
         _ => new
         {

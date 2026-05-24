@@ -82,7 +82,7 @@ public class JobFetchDAPostgres : IJobFetchDA
             run.Status          = status;
             run.CompletedAt     = DateTime.UtcNow;
             run.DurationSeconds = (int)(run.CompletedAt.Value - run.StartedAt).TotalSeconds;
-            run.ErrorMessage    = errorMessage;
+            run.ErrorMessage    = errorMessage?.Length > 2000 ? errorMessage[..2000] : errorMessage;
             run.UpdatedAt       = DateTime.UtcNow;
 
             await _db.SaveChangesAsync();
