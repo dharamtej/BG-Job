@@ -266,21 +266,15 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
 
         var isH1B         = ContainsAny(fullText, "h1b", "h-1b", "visa sponsor", "will sponsor") ||
                             (companyName != null && sponsors.Contains(companyName));
-        var isContract    = ContainsAny(fullText, "contract", "contractor") ||
-                            (contractType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true);
-        var isC2C         = ContainsAny(fullText, "c2c", "corp to corp", "corp-to-corp");
-        var isW2          = ContainsAny(fullText, "w2", "w-2");
-        var isFreelance   = ContainsAny(fullText, "1099", "freelance", "independent contractor") ||
-                            (contractType?.Contains("freelance", StringComparison.OrdinalIgnoreCase) == true);
-        var isPrimeVendor = ContainsAny(fullText, "prime vendor", "direct client", "end client");
-        var isStaffing    = ContainsAny(fullText, "staffing", "recruiting firm") ||
-                            ContainsAny(companyName, "staffing", "consulting", "solutions");
-        var isUniversity  = ContainsAny(companyName, "university", "college", "institute", "academia") ||
-                            ContainsAny(fullText, "university", "academic", "faculty");
-        var isStartup     = ContainsAny(fullText, "startup", "start-up", "series a", "series b", "seed", "venture") ||
-                            ContainsAny(companyName, "startup", "start-up");
-        var isNonProfit   = ContainsAny(fullText, "nonprofit", "non-profit", "501(c)", "501c3", "ngo") ||
-                            ContainsAny(companyName, "foundation", "nonprofit", "non-profit");
+        const bool isContract    = false; // Jobicy is a remote-only board — not a contract/staffing board
+        const bool isC2C         = false;
+        const bool isW2          = false;
+        const bool isFreelance   = false;
+        const bool isPrimeVendor = false;
+        const bool isStaffing    = false;
+        const bool isUniversity  = false;
+        const bool isStartup     = false;
+        const bool isNonProfit   = false;
 
         return new ApiRawJob
         {
@@ -310,7 +304,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             CompanyLogoUrl    = logoUrl,
             Skills            = skills,
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B || ContainsAny(fullText, "sponsor", "visa"),
+            IsSponsored       = isH1B,
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,
