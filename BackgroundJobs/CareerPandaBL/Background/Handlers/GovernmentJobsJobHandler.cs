@@ -32,9 +32,6 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
     private readonly string _authKey;
     private readonly string _userAgent;
 
-    // AsyncLocal so each job execution has its own page count — safe for singleton
-    private static readonly AsyncLocal<int> _totalPagesAvailable = new();
-
     public GovernmentJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
@@ -51,10 +48,6 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
     protected override async Task<List<ApiRawJob>> FetchPageAsync(
         int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
     {
-        // Reset on page 1 so each run starts fresh; auto-stop once all pages fetched
-        if (page == 1) _totalPagesAvailable.Value = int.MaxValue;
-        if (page > _totalPagesAvailable.Value) return [];
-
         var client  = _http.CreateClient("USAJobs");
         var keyword = Uri.EscapeDataString(input.SearchQuery ?? "");
 
@@ -71,20 +64,19 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
 
             var res = await client.SendAsync(req, ct);
 
-            // 403 = rate-limited / gateway blocked — stop the page loop cleanly
-            if (res.StatusCode == System.Net.HttpStatusCode.Forbidden)
-            {
-                Logger.LogWarning(
-                    "[GovernmentJobs] 403 on page {P} (attempt {A}) — rate limited, stopping gracefully",
-                    page, attempt);
-                return [];
-            }
-
-            // 429 / 503 = transient — wait and retry
-            if (res.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
+            // 403 / 429 / 503 = rate-limited or transient — back off and retry
+            if (res.StatusCode == System.Net.HttpStatusCode.Forbidden      ||
+                res.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
                 res.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
             {
-                int backoff = (int)Math.Pow(2, attempt) * 1000;
+                if (attempt == 3)
+                {
+                    Logger.LogWarning(
+                        "[GovernmentJobs] {Code} on page {P} — all retries exhausted, skipping page",
+                        (int)res.StatusCode, page);
+                    return [];
+                }
+                int backoff = (int)Math.Pow(2, attempt + 1) * 1000; // 4s → 8s → (never, exits above)
                 Logger.LogWarning(
                     "[GovernmentJobs] {Code} on page {P} (attempt {A}) — retrying in {B}ms",
                     (int)res.StatusCode, page, attempt, backoff);
@@ -110,12 +102,9 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
                     int.TryParse(totalEl.GetString(), out totalCount);
 
                 if (totalCount > 0)
-                {
-                    _totalPagesAvailable.Value = (int)Math.Ceiling(totalCount / 25.0);
                     Logger.LogInformation(
-                        "[GovernmentJobs] Total available: {Total} jobs → {Pages} pages to fetch",
-                        totalCount, _totalPagesAvailable.Value);
-                }
+                        "[GovernmentJobs] Total available: {Total} jobs across ~{Pages} pages",
+                        totalCount, (int)Math.Ceiling(totalCount / 25.0));
             }
 
             if (!sr.TryGetProperty("SearchResultItems", out var items)) return jobs;
