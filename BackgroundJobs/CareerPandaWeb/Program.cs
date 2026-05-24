@@ -112,6 +112,7 @@ builder.Services.AddHangfire(cfg => cfg
     .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(postgresConnection)));
 builder.Services.AddHangfireServer(o => o.WorkerCount = 2);
 builder.Services.AddSingleton<JobSchedulerService>();
+builder.Services.AddSingleton<SponsorCacheWarmupService>();
 
 builder.Services.AddSingleton<IBackgroundJobQueue>(sp =>
     new BackgroundJobQueue(config.BackgroundJobsConfig.QueueCapacity));
@@ -272,6 +273,9 @@ using (var startupScope = app.Services.CreateScope())
     var scheduler = startupScope.ServiceProvider.GetRequiredService<JobSchedulerService>();
     await scheduler.RegisterAllAsync();
 }
+
+// ── Warm up H1B sponsor list in Redis on startup ───────────────────────────
+await app.Services.GetRequiredService<SponsorCacheWarmupService>().WarmUpAsync();
 
 if (!app.Environment.IsDevelopment())
 {

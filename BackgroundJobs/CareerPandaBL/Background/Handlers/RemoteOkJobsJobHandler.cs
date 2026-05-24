@@ -63,26 +63,16 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         "non-tech", "senior", "junior", "internship"
     ];
 
-    private const string SponsorsCacheKey = "h1b:sponsors:names";
-    private static readonly TimeSpan SponsorsCacheTtl = TimeSpan.FromHours(24);
-
-    private static readonly string[] LegalSuffixes =
-        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
-
     private readonly IHttpClientFactory _http;
-    private readonly ICacheService _cache;
-    private readonly IServiceScopeFactory _scopeFactory;
 
     public RemoteOkJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         ICacheService cacheService,
         ILogger<RemoteOkJobsJobHandler> logger)
-        : base(scopeFactory, logger)
+        : base(scopeFactory, cacheService, logger)
     {
-        _scopeFactory = scopeFactory;
-        _http         = httpClientFactory;
-        _cache        = cacheService;
+        _http = httpClientFactory;
     }
 
     // ── Override: loop all RemoteOK tags ─────────────────────────────────────
@@ -315,38 +305,6 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             CreatedOn         = DateTime.UtcNow,
             UpdatedOn         = DateTime.UtcNow
         };
-    }
-
-    // ── H1B sponsor list ──────────────────────────────────────────────────────
-
-    private async Task<HashSet<string>> LoadSponsorsAsync(CancellationToken ct)
-    {
-        var cached = await _cache.GetAsync<List<string>>(SponsorsCacheKey, ct);
-        if (cached is { Count: > 0 }) return BuildSponsorSet(cached);
-
-        using var scope = _scopeFactory.CreateScope();
-        var da    = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-        var names = await da.GetH1BSponsorNamesAsync(ct);
-        await _cache.SetAsync(SponsorsCacheKey, names, SponsorsCacheTtl, ct);
-        Logger.LogInformation("[RemoteOK] Loaded {Count} H1B sponsors into cache", names.Count);
-        return BuildSponsorSet(names);
-    }
-
-    private static HashSet<string> BuildSponsorSet(List<string> names)
-    {
-        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
-        return set;
-    }
-
-    private static string NormalizeCompanyName(string name)
-    {
-        var upper   = name.ToUpperInvariant();
-        var stripped = System.Text.RegularExpressions.Regex.Replace(upper, @"[^\w\s]", " ");
-        var parts   = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        int count   = parts.Length;
-        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
-        return string.Join(' ', parts, 0, count);
     }
 
     // Required by base class — not used (ExecuteAsync fully overridden)

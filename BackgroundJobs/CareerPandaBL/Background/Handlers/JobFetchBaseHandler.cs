@@ -5,6 +5,7 @@
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -19,13 +20,49 @@ public abstract class JobFetchBaseHandler : IJobHandler
     /// <summary>Milliseconds to wait between page fetches. Override per handler to respect rate limits.</summary>
     protected virtual int InterPageDelayMs => 600;
 
-    private readonly IServiceScopeFactory _scopeFactory;
+    protected readonly IServiceScopeFactory _scopeFactory;
+    protected readonly ICacheService _cache;
     protected readonly ILogger Logger;
 
-    protected JobFetchBaseHandler(IServiceScopeFactory scopeFactory, ILogger logger)
+    protected JobFetchBaseHandler(IServiceScopeFactory scopeFactory, ICacheService cache, ILogger logger)
     {
         _scopeFactory = scopeFactory;
+        _cache        = cache;
         Logger        = logger;
+    }
+
+    private static readonly string[] LegalSuffixes =
+        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
+
+    protected async Task<HashSet<string>> LoadSponsorsAsync(CancellationToken ct)
+    {
+        var cached = await _cache.GetAsync<List<string>>(SponsorCacheWarmupService.CacheKey, ct);
+        if (cached is { Count: > 0 }) return BuildSponsorSet(cached);
+
+        // Cache miss (TTL expired) — reload from DB and re-cache for 24 hrs
+        using var scope = _scopeFactory.CreateScope();
+        var da    = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+        var names = await da.GetH1BSponsorNamesAsync(ct);
+        await _cache.SetAsync(SponsorCacheWarmupService.CacheKey, names, SponsorCacheWarmupService.CacheTtl, ct);
+        Logger.LogInformation("[{T}] Reloaded {Count} H1B sponsors from DB into cache", JobType, names.Count);
+        return BuildSponsorSet(names);
+    }
+
+    protected static HashSet<string> BuildSponsorSet(List<string> names)
+    {
+        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
+        return set;
+    }
+
+    protected static string NormalizeCompanyName(string name)
+    {
+        var upper    = name.ToUpperInvariant();
+        var stripped = System.Text.RegularExpressions.Regex.Replace(upper, @"[^\w\s]", " ");
+        var parts    = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int count    = parts.Length;
+        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
+        return string.Join(' ', parts, 0, count);
     }
 
     // ── IJobHandler entry point ──────────────────────────────────────────────

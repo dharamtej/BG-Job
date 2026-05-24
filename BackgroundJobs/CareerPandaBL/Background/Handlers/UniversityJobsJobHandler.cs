@@ -6,6 +6,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,9 +29,10 @@ public class UniversityJobsJobHandler : JobFetchBaseHandler
     public UniversityJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        ICacheService cacheService,
         IConfiguration configuration,
         ILogger<UniversityJobsJobHandler> logger)
-        : base(scopeFactory, logger)
+        : base(scopeFactory, cacheService, logger)
     {
         _http      = httpClientFactory;
         _authKey   = configuration["JobApiSettings:UsaJobsAuthKey"]   ?? string.Empty;

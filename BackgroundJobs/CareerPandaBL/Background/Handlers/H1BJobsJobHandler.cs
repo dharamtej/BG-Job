@@ -13,14 +13,11 @@ using Microsoft.Extensions.Logging;
 
 namespace CareerPanda.BL.Background.Handlers;
 
-public partial class H1BJobsJobHandler : JobFetchBaseHandler
+public class H1BJobsJobHandler : JobFetchBaseHandler
 {
     public override string JobType        => "H1BJobs";
     protected override string JobCategory => "H1BJobs";
     protected override string ApiSource   => "JSearch";
-
-    private const string SponsorsCacheKey = "h1b:sponsors:names";
-    private static readonly TimeSpan SponsorsCacheTtl = TimeSpan.FromHours(24);
 
     // Each entry targets a different sponsor group — page N uses entry (N-1) % length
     // so every page fetches fresh results instead of paginating the same query (which dies at page 2-3 on free tier)
@@ -53,8 +50,6 @@ public partial class H1BJobsJobHandler : JobFetchBaseHandler
     ];
 
     private readonly IHttpClientFactory _http;
-    private readonly ICacheService _cache;
-    private readonly IServiceScopeFactory _scopeFactory;
     private readonly string _apiKey;
     private readonly string _apiHost;
 
@@ -64,13 +59,11 @@ public partial class H1BJobsJobHandler : JobFetchBaseHandler
         ICacheService cacheService,
         IConfiguration configuration,
         ILogger<H1BJobsJobHandler> logger)
-        : base(scopeFactory, logger)
+        : base(scopeFactory, cacheService, logger)
     {
-        _scopeFactory = scopeFactory;
-        _http         = httpClientFactory;
-        _cache        = cacheService;
-        _apiKey       = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
-        _apiHost      = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
+        _http    = httpClientFactory;
+        _apiKey  = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
+        _apiHost = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
     }
 
     // ── Override: loop all role queries × all US states ──────────────────────
@@ -273,53 +266,6 @@ public partial class H1BJobsJobHandler : JobFetchBaseHandler
             catch (Exception ex) { Logger.LogWarning(ex, "[H1BJobs] Map failed"); }
         }
         return jobs;
-    }
-
-    private async Task<HashSet<string>> LoadSponsorsAsync(CancellationToken ct)
-    {
-        var cached = await _cache.GetAsync<List<string>>(SponsorsCacheKey, ct);
-        if (cached is { Count: > 0 })
-            return BuildSponsorSet(cached);
-
-        using var scope = _scopeFactory.CreateScope();
-        var da = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-        var names = await da.GetH1BSponsorNamesAsync(ct);
-
-        await _cache.SetAsync(SponsorsCacheKey, names, SponsorsCacheTtl, ct);
-
-        Logger.LogInformation("[H1BJobs] Loaded {Count} H1B sponsors from DB into cache", names.Count);
-        return BuildSponsorSet(names);
-    }
-
-    // Adds each name twice: as-is (for Wikipedia-enriched exact match)
-    // and normalized (for unenriched DB keys like "AMAZON COM INC" → "AMAZON COM")
-    private static HashSet<string> BuildSponsorSet(List<string> names)
-    {
-        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names)
-        {
-            set.Add(name);
-            set.Add(NormalizeCompanyName(name));
-        }
-        return set;
-    }
-
-    // Strips punctuation and common legal suffixes so "Amazon.com, Inc." matches "AMAZON COM INC"
-    [System.Text.RegularExpressions.GeneratedRegex(@"[^\w\s]")]
-    private static partial System.Text.RegularExpressions.Regex PunctuationRe();
-
-    private static readonly string[] LegalSuffixes =
-        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
-
-    private static string NormalizeCompanyName(string name)
-    {
-        var upper = name.ToUpperInvariant();
-        var stripped = PunctuationRe().Replace(upper, " ");
-        var parts = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        int count = parts.Length;
-        while (count > 1 && LegalSuffixes.Contains(parts[count - 1]))
-            count--;
-        return string.Join(' ', parts, 0, count);
     }
 
     private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)

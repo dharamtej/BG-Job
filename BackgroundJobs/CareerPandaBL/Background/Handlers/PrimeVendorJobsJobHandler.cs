@@ -4,6 +4,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -31,9 +32,10 @@ public class PrimeVendorJobsJobHandler : JobFetchBaseHandler
     public PrimeVendorJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
+        ICacheService cacheService,
         IConfiguration configuration,
         ILogger<PrimeVendorJobsJobHandler> logger)
-        : base(scopeFactory, logger)
+        : base(scopeFactory, cacheService, logger)
     {
         _http    = httpClientFactory;
         _apiKey  = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;

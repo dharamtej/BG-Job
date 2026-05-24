@@ -136,8 +136,6 @@ public class AllJobsJobHandler : JobFetchBaseHandler
     private static readonly TimeSpan QueriesCacheTtl = TimeSpan.FromHours(6);
 
     private readonly IHttpClientFactory _http;
-    private readonly ICacheService _cache;
-    private readonly IServiceScopeFactory _scopeFactory;
     private readonly string _apiKey;
     private readonly string _apiHost;
 
@@ -147,13 +145,11 @@ public class AllJobsJobHandler : JobFetchBaseHandler
         ICacheService cacheService,
         IConfiguration configuration,
         ILogger<AllJobsJobHandler> logger)
-        : base(scopeFactory, logger)
+        : base(scopeFactory, cacheService, logger)
     {
-        _scopeFactory = scopeFactory;
-        _http         = httpClientFactory;
-        _cache        = cacheService;
-        _apiKey       = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
-        _apiHost      = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
+        _http    = httpClientFactory;
+        _apiKey  = configuration["JobApiSettings:JSearchApiKey"] ?? string.Empty;
+        _apiHost = configuration["JobApiSettings:JSearchApiHost"] ?? "jsearch.p.rapidapi.com";
     }
 
     // ── Override ExecuteAsync to iterate ALL role queries without a MaxPages cap ──
