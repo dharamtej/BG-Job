@@ -115,6 +115,30 @@ public class FetchJobController : CoreController
     public Task<FrameworkResponse> TriggerPrimeVendorJobs([FromBody] JobFetchInput? input) =>
         TriggerFetch("primevendorjobs", input);
 
+    /// <summary>Trigger RemoteOK Jobs fetch (RemoteOK public API — US remote jobs).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/remoteoknobs/run")]
+    public Task<FrameworkResponse> TriggerRemoteOkJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("remoteoknobs", input);
+
+    /// <summary>Trigger Jobicy Jobs fetch (Jobicy public API — remote jobs by industry).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/jobicyjobs/run")]
+    public Task<FrameworkResponse> TriggerJobicyJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("jobicyjobs", input);
+
+    /// <summary>Trigger Adzuna Jobs fetch (Adzuna API).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/adzunajobs/run")]
+    public Task<FrameworkResponse> TriggerAdzunaJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("adzunajobs", input);
+
+    /// <summary>Trigger H1B Sponsor Enrichment (enriches existing raw jobs with sponsor flag).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/h1bsponorenrichment/run")]
+    public Task<FrameworkResponse> TriggerH1BSponsorEnrichment([FromBody] JobFetchInput? input) =>
+        TriggerFetch("h1bsponorenrichment", input);
+
     // ── Status & monitoring ────────────────────────────────────────────────────
 
     /// <summary>

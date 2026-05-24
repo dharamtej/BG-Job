@@ -16,13 +16,17 @@ public class JobFetchBL
     public static readonly IReadOnlyDictionary<string, string> CategoryMap =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "alljobs",         "AllJobs"         },
-            { "startupjobs",     "StartupJobs"     },
-            { "universityjobs",  "UniversityJobs"  },
-            { "nonprofitjobs",   "NonProfitJobs"   },
-            { "contractjobs",    "ContractJobs"    },
-            { "h1bjobs",         "H1BJobs"         },
-            { "primevendorjobs", "PrimeVendorJobs" }
+            { "alljobs",              "AllJobs"              },
+            { "startupjobs",          "StartupJobs"          },
+            { "universityjobs",       "UniversityJobs"       },
+            { "nonprofitjobs",        "NonProfitJobs"        },
+            { "contractjobs",         "ContractJobs"         },
+            { "h1bjobs",              "H1BJobs"              },
+            { "primevendorjobs",      "PrimeVendorJobs"      },
+            { "remoteoknobs",         "RemoteOkJobs"         },
+            { "jobicyjobs",           "JobicyJobs"           },
+            { "adzunajobs",           "AdzunaJobs"           },
+            { "h1bsponorenrichment",  "H1BSponsorEnrichment" }
         };
 
     private readonly JobBL _jobBl;
