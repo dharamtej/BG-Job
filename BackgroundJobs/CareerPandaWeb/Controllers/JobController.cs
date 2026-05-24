@@ -251,6 +251,12 @@ public class JobController : CoreController
             JobType     = "GovernmentJobs",
             Description = """{"MaxPages":500}"""
         },
+        "GreenhouseJobs" => new
+        {
+            Name        = "Fetch Greenhouse Jobs — All 664 Board Tokens",
+            JobType     = "GreenhouseJobs",
+            Description = """{}"""
+        },
         _ => new
         {
             Name        = jobType,

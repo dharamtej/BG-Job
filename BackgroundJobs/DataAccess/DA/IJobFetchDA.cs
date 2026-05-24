@@ -34,6 +34,9 @@ public interface IJobFetchDA
     // ── Job Role Queries ─────────────────────────────────────────────────────
     Task<List<string>> GetActiveJobRoleQueriesAsync(CancellationToken cancellationToken = default);
 
+    // ── Greenhouse ──────────────────────────────────────────────────────────
+    Task<List<ApiGreenhouseBoardToken>> GetValidGreenhouseTokensAsync(CancellationToken cancellationToken = default);
+
     // ── H1B Sponsors ────────────────────────────────────────────────────────
     Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default);
     Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default);

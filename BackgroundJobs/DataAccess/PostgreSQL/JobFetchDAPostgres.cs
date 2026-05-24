@@ -375,6 +375,15 @@ public class JobFetchDAPostgres : IJobFetchDA
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<List<ApiGreenhouseBoardToken>> GetValidGreenhouseTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.GreenhouseBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status == "VALID")
+            .OrderBy(t => t.CompanyName)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default)
     {
         return await _db.H1bSponsors
