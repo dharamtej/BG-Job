@@ -100,15 +100,22 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
             if (!json.TryGetProperty("SearchResult", out var sr)) return jobs;
 
             // On page 1 — read total count and calculate how many pages we need
-            if (page == 1 &&
-                sr.TryGetProperty("SearchResultCountAll", out var totalEl) &&
-                int.TryParse(totalEl.GetString(), out var totalCount) &&
-                totalCount > 0)
+            // SearchResultCountAll may be a JSON Number or String depending on API version
+            if (page == 1 && sr.TryGetProperty("SearchResultCountAll", out var totalEl))
             {
-                _totalPagesAvailable.Value = (int)Math.Ceiling(totalCount / 25.0);
-                Logger.LogInformation(
-                    "[GovernmentJobs] Total available: {Total} jobs → {Pages} pages to fetch",
-                    totalCount, _totalPagesAvailable.Value);
+                int totalCount = 0;
+                if (totalEl.ValueKind == JsonValueKind.Number)
+                    totalEl.TryGetInt32(out totalCount);
+                else if (totalEl.ValueKind == JsonValueKind.String)
+                    int.TryParse(totalEl.GetString(), out totalCount);
+
+                if (totalCount > 0)
+                {
+                    _totalPagesAvailable.Value = (int)Math.Ceiling(totalCount / 25.0);
+                    Logger.LogInformation(
+                        "[GovernmentJobs] Total available: {Total} jobs → {Pages} pages to fetch",
+                        totalCount, _totalPagesAvailable.Value);
+                }
             }
 
             if (!sr.TryGetProperty("SearchResultItems", out var items)) return jobs;
