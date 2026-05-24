@@ -18,7 +18,7 @@ public class JobFetchBL
         {
             { "alljobs",              "AllJobs"              },
             { "startupjobs",          "StartupJobs"          },
-            { "universityjobs",       "UniversityJobs"       },
+            { "governmentjobs",       "GovernmentJobs"       },
             { "nonprofitjobs",        "NonProfitJobs"        },
             { "contractjobs",         "ContractJobs"         },
             { "h1bjobs",              "H1BJobs"              },

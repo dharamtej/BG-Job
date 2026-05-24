@@ -85,11 +85,11 @@ public class FetchJobController : CoreController
     public Task<FrameworkResponse> TriggerStartupJobs([FromBody] JobFetchInput? input) =>
         TriggerFetch("startupjobs", input);
 
-    /// <summary>Trigger University-Jobs fetch (USAJobs.gov — free).</summary>
+    /// <summary>Trigger Government-Jobs fetch (USAJobs.gov — US federal jobs, free).</summary>
     [HttpPost]
-    [Route("api/fetchjobs/universityjobs/run")]
-    public Task<FrameworkResponse> TriggerUniversityJobs([FromBody] JobFetchInput? input) =>
-        TriggerFetch("universityjobs", input);
+    [Route("api/fetchjobs/governmentjobs/run")]
+    public Task<FrameworkResponse> TriggerGovernmentJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("governmentjobs", input);
 
     /// <summary>Trigger Non-Profit-Jobs fetch (The Muse — free).</summary>
     [HttpPost]

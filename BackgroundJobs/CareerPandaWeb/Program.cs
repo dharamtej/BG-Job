@@ -123,7 +123,7 @@ builder.Services.AddSingleton<IJobHandler, DefaultJobHandler>();
 builder.Services.AddSingleton<IJobHandler, AllJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, AdzunaJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, StartupJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, UniversityJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, GovernmentJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, NonProfitJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, ContractJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, H1BJobsJobHandler>();

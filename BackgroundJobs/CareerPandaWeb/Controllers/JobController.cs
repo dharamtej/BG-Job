@@ -245,11 +245,11 @@ public class JobController : CoreController
             JobType     = "JobicyJobs",
             Description = """{"HoursBack":720}"""
         },
-        "ArbeitnowJobs" => new
+        "GovernmentJobs" => new
         {
-            Name        = "Fetch Jobs — Paginated with Visa Sponsorship flag (Arbeitnow)",
-            JobType     = "ArbeitnowJobs",
-            Description = """{"HoursBack":720,"MaxPages":50}"""
+            Name        = "Fetch US Federal Government Jobs (USAJobs.gov)",
+            JobType     = "GovernmentJobs",
+            Description = """{"SearchQuery":"software engineer","MaxPages":10}"""
         },
         _ => new
         {
