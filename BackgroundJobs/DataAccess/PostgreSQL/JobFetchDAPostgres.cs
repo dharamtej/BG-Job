@@ -174,16 +174,32 @@ public class JobFetchDAPostgres : IJobFetchDA
             job.CreatedOn = DateTime.UtcNow;
             job.UpdatedOn = DateTime.UtcNow;
             _db.RawJobs.Add(job);
-            await _db.SaveChangesAsync();
-            return (true, job.Id);
+            try
+            {
+                await _db.SaveChangesAsync();
+                return (true, job.Id);
+            }
+            catch
+            {
+                _db.Entry(job).State = EntityState.Detached;
+                throw;
+            }
         }
         else
         {
             // UPDATE — refresh all mutable fields
             MapUpdatableFields(existing, job);
             existing.UpdatedOn = DateTime.UtcNow;
-            await _db.SaveChangesAsync();
-            return (false, existing.Id);
+            try
+            {
+                await _db.SaveChangesAsync();
+                return (false, existing.Id);
+            }
+            catch
+            {
+                _db.Entry(existing).State = EntityState.Detached;
+                throw;
+            }
         }
     }
 

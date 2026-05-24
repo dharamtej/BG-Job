@@ -32,8 +32,8 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
     private readonly string _authKey;
     private readonly string _userAgent;
 
-    // Set after page 1 using SearchResultCountAll — stops loop early once all pages fetched
-    private int _totalPagesAvailable = int.MaxValue;
+    // AsyncLocal so each job execution has its own page count — safe for singleton
+    private static readonly AsyncLocal<int> _totalPagesAvailable = new();
 
     public GovernmentJobsJobHandler(
         IServiceScopeFactory scopeFactory,
@@ -51,8 +51,9 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
     protected override async Task<List<ApiRawJob>> FetchPageAsync(
         int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
     {
-        // Auto-stop once we've fetched all available pages
-        if (page > _totalPagesAvailable) return [];
+        // Reset on page 1 so each run starts fresh; auto-stop once all pages fetched
+        if (page == 1) _totalPagesAvailable.Value = int.MaxValue;
+        if (page > _totalPagesAvailable.Value) return [];
 
         var client  = _http.CreateClient("USAJobs");
         var keyword = Uri.EscapeDataString(input.SearchQuery ?? "");
@@ -104,10 +105,10 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
                 int.TryParse(totalEl.GetString(), out var totalCount) &&
                 totalCount > 0)
             {
-                _totalPagesAvailable = (int)Math.Ceiling(totalCount / 25.0);
+                _totalPagesAvailable.Value = (int)Math.Ceiling(totalCount / 25.0);
                 Logger.LogInformation(
                     "[GovernmentJobs] Total available: {Total} jobs → {Pages} pages to fetch",
-                    totalCount, _totalPagesAvailable);
+                    totalCount, _totalPagesAvailable.Value);
             }
 
             if (!sr.TryGetProperty("SearchResultItems", out var items)) return jobs;
