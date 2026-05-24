@@ -242,9 +242,11 @@ public class JobFetchDAPostgres : IJobFetchDA
             await _db.SaveChangesAsync();
             return newCompany.Id;
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
             // Race condition: another concurrent request created the same company.
+            var inner = ex.InnerException?.Message ?? ex.Message;
+            _logger.LogWarning("==> Company upsert race for '{Name}' — {Inner}", name, inner);
             _db.Entry(newCompany).State = EntityState.Detached;
             var existing = await _db.Companies
                 .FirstOrDefaultAsync(c => c.CompanyName.ToLower() == nameLower);
@@ -277,7 +279,10 @@ public class JobFetchDAPostgres : IJobFetchDA
             catch (Exception ex)
             {
                 errors++;
-                _logger.LogWarning(ex, "UpsertRawJob failed for job_link={Link}", job.JobLink);
+                var inner = ex.InnerException?.Message ?? ex.Message;
+                _logger.LogError(
+                    "==> UpsertRawJob FAILED | Source={Source} SourceId={SourceId} Title={Title} Link={Link} | Error: {Error} | Inner: {Inner}",
+                    job.Source, job.SourceId, job.JobTitle, job.JobLink, ex.Message, inner);
             }
         }
 
