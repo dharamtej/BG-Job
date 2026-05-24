@@ -67,7 +67,7 @@ public class AuthController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Token issuance failed for {Email}", request.Email);
-            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Unable to issue token." });
+            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Unable to issue token.", detail = ex.Message });
         }
     }
 }
