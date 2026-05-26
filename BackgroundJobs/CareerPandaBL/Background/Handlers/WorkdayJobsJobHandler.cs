@@ -89,7 +89,9 @@ public partial class WorkdayJobsJobHandler : IJobHandler
                     var (jobs, httpCode, tokenStatus, jobCount) =
                         await FetchSiteJobsAsync(client, token, run.Id, isH1B, cancellationToken);
 
-                    await fetchDa.UpdateWorkdayTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+                    // null tokenStatus = transient error (5xx, 429) — leave status unchanged so it retries next run
+                    if (tokenStatus != null)
+                        await fetchDa.UpdateWorkdayTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
 
                     if (jobs.Count > 0)
                     {
@@ -100,12 +102,12 @@ public partial class WorkdayJobsJobHandler : IJobHandler
                         totalErrors   += err;
                     }
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    // Transient error (timeout, DNS, network) — don't touch status, will retry next run
                     totalErrors++;
-                    _logger.LogWarning(ex, "[Workday] Failed processing {Company}/{Site}", token.CompanySlug, token.SiteId);
-                    await fetchDa.UpdateWorkdayTokenStatusAsync(token.Id, "INVALID", 0, 0, cancellationToken);
+                    _logger.LogWarning(ex, "[Workday] Transient error {Company}/{Site} — status unchanged", token.CompanySlug, token.SiteId);
                 }
 
                 sitesProcessed++;
@@ -185,7 +187,8 @@ public partial class WorkdayJobsJobHandler : IJobHandler
 
     // ── Per-site paginated fetch ───────────────────────────────────────────────
 
-    private async Task<(List<ApiRawJob> jobs, short httpCode, string tokenStatus, int jobCount)>
+    // tokenStatus = null means transient error — caller must NOT update the token status
+    private async Task<(List<ApiRawJob> jobs, short httpCode, string? tokenStatus, int jobCount)>
         FetchSiteJobsAsync(
             HttpClient client,
             ApiWorkdayBoardToken token,
@@ -214,11 +217,17 @@ public partial class WorkdayJobsJobHandler : IJobHandler
             {
                 _logger.LogWarning("[Workday] {Status} for {Slug}/{Site}", (int)resp.StatusCode, token.CompanySlug, token.SiteId);
 
-                // 404 = site not found; other errors are transient
-                if (resp.StatusCode == HttpStatusCode.NotFound || results.Count == 0)
+                // Definitive failures — board does not exist or access permanently denied
+                if (resp.StatusCode is HttpStatusCode.NotFound
+                                    or HttpStatusCode.Forbidden
+                                    or HttpStatusCode.Unauthorized)
                     return ([], httpCode, "INVALID", 0);
 
-                // Partial data already collected — stop pagination, mark valid
+                // Transient failures (5xx, 429 rate-limit, etc.) — return null so caller skips status update
+                if (results.Count == 0)
+                    return ([], httpCode, null, 0);
+
+                // Transient error mid-pagination but we already have some jobs — keep what we got
                 break;
             }
 

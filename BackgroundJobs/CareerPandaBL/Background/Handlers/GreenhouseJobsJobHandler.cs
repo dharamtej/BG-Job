@@ -97,7 +97,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                         totalErrors   += err;
                     }
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     totalErrors++;
@@ -232,7 +232,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
 
                 await Task.Delay(50, ct);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[Greenhouse] Failed fetching job {JobId} for {Token}", jobId, token.BoardToken);

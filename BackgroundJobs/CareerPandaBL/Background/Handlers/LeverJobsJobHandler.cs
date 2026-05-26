@@ -4,6 +4,7 @@
 //          → GET https://api.lever.co/v0/postings/{token}?mode=json  (full list + details in one call)
 //          → Update token status (VALID / EMPTY / INVALID) based on response
 //          → Upsert into api.raw_jobs
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -84,8 +85,9 @@ public partial class LeverJobsJobHandler : IJobHandler
                     var (jobs, httpCode, tokenStatus, jobCount) =
                         await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
 
-                    // Update token status after every company (validates on first run)
-                    await fetchDa.UpdateLeverTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+                    // null = transient error — leave status unchanged so it retries next run
+                    if (tokenStatus != null)
+                        await fetchDa.UpdateLeverTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
 
                     if (jobs.Count > 0)
                     {
@@ -96,12 +98,12 @@ public partial class LeverJobsJobHandler : IJobHandler
                         totalErrors   += err;
                     }
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    // Transient error (timeout, DNS, network) — don't touch status, will retry next run
                     totalErrors++;
-                    _logger.LogWarning(ex, "[Lever] Failed processing {Company}", token.CompanyName);
-                    await fetchDa.UpdateLeverTokenStatusAsync(token.Id, "INVALID", 0, 0, cancellationToken);
+                    _logger.LogWarning(ex, "[Lever] Transient error {Company} — status unchanged", token.CompanyName);
                 }
 
                 companiesProcessed++;
@@ -180,7 +182,8 @@ public partial class LeverJobsJobHandler : IJobHandler
 
     // ── Per-company fetch ─────────────────────────────────────────────────────
 
-    private async Task<(List<ApiRawJob> jobs, short httpCode, string tokenStatus, int jobCount)>
+    // tokenStatus = null means transient error — caller must NOT update the token status
+    private async Task<(List<ApiRawJob> jobs, short httpCode, string? tokenStatus, int jobCount)>
         FetchCompanyJobsAsync(
             HttpClient client,
             ApiLeverBoardToken token,
@@ -197,7 +200,15 @@ public partial class LeverJobsJobHandler : IJobHandler
         if (!resp.IsSuccessStatusCode)
         {
             _logger.LogWarning("[Lever] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
-            return ([], httpCode, "INVALID", 0);
+
+            // Definitive failures — board does not exist or access permanently denied
+            if (resp.StatusCode is HttpStatusCode.NotFound
+                                or HttpStatusCode.Forbidden
+                                or HttpStatusCode.Unauthorized)
+                return ([], httpCode, "INVALID", 0);
+
+            // Transient failures (5xx, 429) — return null so caller skips status update
+            return ([], httpCode, null, 0);
         }
 
         var jobs = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
