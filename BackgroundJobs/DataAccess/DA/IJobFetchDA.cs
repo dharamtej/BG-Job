@@ -37,6 +37,10 @@ public interface IJobFetchDA
     // ── Greenhouse ──────────────────────────────────────────────────────────
     Task<List<ApiGreenhouseBoardToken>> GetValidGreenhouseTokensAsync(CancellationToken cancellationToken = default);
 
+    // ── Lever ───────────────────────────────────────────────────────────────
+    Task<List<ApiLeverBoardToken>> GetActiveLeverTokensAsync(CancellationToken cancellationToken = default);
+    Task UpdateLeverTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
+
     // ── H1B Sponsors ────────────────────────────────────────────────────────
     Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default);
     Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default);

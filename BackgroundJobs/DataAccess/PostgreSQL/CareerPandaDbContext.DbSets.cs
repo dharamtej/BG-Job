@@ -9,6 +9,7 @@ namespace CareerPanda.DataAccess.PostgreSQL;
 public partial class CareerPandaDbContext
 {    public DbSet<ApiCompany> Companies { get; set; } = null!;
     public DbSet<ApiGreenhouseBoardToken> GreenhouseBoardTokens { get; set; } = null!;
+    public DbSet<ApiLeverBoardToken> LeverBoardTokens { get; set; } = null!;
     public DbSet<ApiH1bSponsor> H1bSponsors { get; set; } = null!;
     public DbSet<ApiRawJob> RawJobs { get; set; } = null!;
     public DbSet<CpAgentAssignment> AgentAssignments { get; set; } = null!;

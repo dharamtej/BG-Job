@@ -1,0 +1,6 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/BackgroundJobs/CareerPandaWeb/appsettings.Development.json
+/BackgroundJobs/CareerPandaWeb/appsettings.json
