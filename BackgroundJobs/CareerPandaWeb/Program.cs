@@ -84,6 +84,12 @@ builder.Services.AddHttpClient("Lever", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 jobs-aggregator");
     c.DefaultRequestHeaders.Add("Accept", "application/json");
 });
+builder.Services.AddHttpClient("Workday", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<JobCancellationRegistry>();
@@ -139,6 +145,7 @@ builder.Services.AddSingleton<IJobHandler, RemoteOkJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, JobicyJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, GreenhouseJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, LeverJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, WorkdayJobsJobHandler>();
 // builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
 builder.Services.AddHostedService<BackgroundJobWorker>();
 

@@ -405,6 +405,28 @@ public class JobFetchDAPostgres : IJobFetchDA
             cancellationToken);
     }
 
+    public async Task<List<ApiWorkdayBoardToken>> GetActiveWorkdayTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.WorkdayBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status != "INVALID")
+            .OrderBy(t => t.CompanyName)
+            .ThenBy(t => t.SiteId)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateWorkdayTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
+    {
+        await _db.WorkdayBoardTokens
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(t => t
+                .SetProperty(x => x.Status,    status)
+                .SetProperty(x => x.HttpCode,  httpCode)
+                .SetProperty(x => x.JobCount,  jobCount)
+                .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
     public async Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default)
     {
         return await _db.H1bSponsors
