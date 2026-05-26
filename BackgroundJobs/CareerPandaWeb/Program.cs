@@ -287,6 +287,23 @@ using (var startupScope = app.Services.CreateScope())
 // ── Warm up H1B sponsor list in Redis on startup ───────────────────────────
 await app.Services.GetRequiredService<SponsorCacheWarmupService>().WarmUpAsync();
 
+// ── Recover orphaned fetch runs left "Running" by previous shutdown ────────
+using (var recoveryScope = app.Services.CreateScope())
+{
+    var da      = recoveryScope.ServiceProvider.GetRequiredService<CareerPanda.DataAccess.DA.IJobFetchDA>();
+    var rlogger = recoveryScope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("StartupRecovery");
+    try
+    {
+        var recovered = await da.RecoverOrphanedFetchRunsAsync();
+        if (recovered > 0)
+            rlogger.LogWarning("[Startup] Marked {Count} orphaned fetch runs as Failed (left Running by prior shutdown)", recovered);
+    }
+    catch (Exception ex)
+    {
+        rlogger.LogError(ex, "[Startup] Orphaned fetch-run recovery failed");
+    }
+}
+
 // Railway terminates SSL at the proxy — container only receives plain HTTP on $PORT.
 // UseHttpsRedirection inside the container causes "failed to determine https port" and hangs requests.
 

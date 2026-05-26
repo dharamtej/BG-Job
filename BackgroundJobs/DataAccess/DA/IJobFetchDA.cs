@@ -25,6 +25,13 @@ public interface IJobFetchDA
 
     Task<FrameworkResponse> GetFetchRunAsync(string runId);
 
+    /// <summary>
+    /// Marks any fetch_run rows still in "Running" state as "Failed" on app startup.
+    /// In-process jobs do not survive an app restart, so leftover "Running" rows
+    /// are orphans that would otherwise block reporting and re-runs.
+    /// </summary>
+    Task<int> RecoverOrphanedFetchRunsAsync(CancellationToken cancellationToken = default);
+
     Task<FrameworkResponse> GetFetchRunsAsync(
         int pageNumber,
         int pageSize,

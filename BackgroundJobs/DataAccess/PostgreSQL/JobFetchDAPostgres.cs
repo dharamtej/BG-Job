@@ -283,22 +283,105 @@ public class JobFetchDAPostgres : IJobFetchDA
         IEnumerable<ApiRawJob> jobs, CancellationToken cancellationToken)
     {
         int inserted = 0, updated = 0, errors = 0;
+        var batch = jobs as IList<ApiRawJob> ?? jobs.ToList();
+        if (batch.Count == 0) return (0, 0, 0);
 
-        foreach (var job in jobs)
+        // Group by (Source, CompanyName) — each ATS handler typically sends one company per call,
+        // so this collapses to a single group and a single company resolution.
+        var groups = batch.GroupBy(j => (j.Source ?? "", (j.CompanyName ?? "").Trim().ToLowerInvariant()));
+
+        foreach (var group in groups)
         {
             if (cancellationToken.IsCancellationRequested) break;
+
+            var groupJobs = group.ToList();
             try
             {
-                var (isNew, _) = await UpsertRawJobAsync(job);
-                if (isNew) inserted++; else updated++;
+                // 1. Resolve company once for the whole group
+                int companyId = 0;
+                var first = groupJobs[0];
+                if (!string.IsNullOrWhiteSpace(first.CompanyName))
+                    companyId = await ResolveOrCreateCompanyAsync(first);
+
+                // 2. Batch-load existing rows by (source, source_id) and by job_link
+                var source = first.Source ?? "";
+                var sourceIds = groupJobs
+                    .Where(j => !string.IsNullOrWhiteSpace(j.SourceId))
+                    .Select(j => j.SourceId!)
+                    .Distinct()
+                    .ToList();
+                var jobLinks = groupJobs
+                    .Where(j => !string.IsNullOrWhiteSpace(j.JobLink))
+                    .Select(j => j.JobLink!)
+                    .Distinct()
+                    .ToList();
+
+                var existingBySourceId = sourceIds.Count > 0
+                    ? await _db.RawJobs
+                        .Where(j => j.Source == source && sourceIds.Contains(j.SourceId!))
+                        .ToDictionaryAsync(j => j.SourceId!, cancellationToken)
+                    : new Dictionary<string, ApiRawJob>();
+
+                var existingByLink = jobLinks.Count > 0
+                    ? await _db.RawJobs
+                        .Where(j => j.JobLink != null && jobLinks.Contains(j.JobLink))
+                        .ToDictionaryAsync(j => j.JobLink!, cancellationToken)
+                    : new Dictionary<string, ApiRawJob>();
+
+                // 3. Walk the batch, classify each row as insert/update, accumulate in-memory
+                var toAdd = new List<ApiRawJob>();
+                foreach (var job in groupJobs)
+                {
+                    job.OurCompanyId = companyId;
+
+                    ApiRawJob? existing = null;
+                    if (!string.IsNullOrWhiteSpace(job.JobLink))
+                        existingByLink.TryGetValue(job.JobLink!, out existing);
+                    if (existing == null && !string.IsNullOrWhiteSpace(job.SourceId))
+                        existingBySourceId.TryGetValue(job.SourceId!, out existing);
+
+                    if (existing == null)
+                    {
+                        if (string.IsNullOrWhiteSpace(job.PublicId))
+                            job.PublicId = Guid.NewGuid().ToString("N");
+                        job.CreatedOn = DateTime.UtcNow;
+                        job.UpdatedOn = DateTime.UtcNow;
+                        toAdd.Add(job);
+                        inserted++;
+                    }
+                    else
+                    {
+                        MapUpdatableFields(existing, job);
+                        existing.UpdatedOn = DateTime.UtcNow;
+                        updated++;
+                    }
+                }
+
+                if (toAdd.Count > 0)
+                    _db.RawJobs.AddRange(toAdd);
+
+                // 4. Single SaveChanges for the whole company batch
+                await _db.SaveChangesAsync(cancellationToken);
+
+                // 5. Detach so the change-tracker doesn't bloat for the next batch
+                foreach (var j in toAdd) _db.Entry(j).State = EntityState.Detached;
+                foreach (var j in existingBySourceId.Values) _db.Entry(j).State = EntityState.Detached;
+                foreach (var j in existingByLink.Values)
+                    if (_db.Entry(j).State != EntityState.Detached) _db.Entry(j).State = EntityState.Detached;
             }
             catch (Exception ex)
             {
-                errors++;
+                errors += groupJobs.Count;
+                // Adjust counters: this batch didn't actually commit
+                inserted -= groupJobs.Count(j => j.Id == 0);
                 var inner = ex.InnerException?.Message ?? ex.Message;
                 _logger.LogError(
-                    "==> UpsertRawJob FAILED | Source={Source} SourceId={SourceId} Title={Title} Link={Link} | Error: {Error} | Inner: {Inner}",
-                    job.Source, job.SourceId, job.JobTitle, job.JobLink, ex.Message, inner);
+                    "==> BulkUpsert batch FAILED | Source={Source} Company={Company} Count={Count} | Error: {Error} | Inner: {Inner}",
+                    groupJobs[0].Source, groupJobs[0].CompanyName, groupJobs.Count, ex.Message, inner);
+
+                // Reset the context to prevent poisoned change-tracker carrying into next batch
+                foreach (var entry in _db.ChangeTracker.Entries().ToList())
+                    entry.State = EntityState.Detached;
             }
         }
 
@@ -436,6 +519,17 @@ public class JobFetchDAPostgres : IJobFetchDA
                 .SetProperty(x => x.HttpCode,  httpCode)
                 .SetProperty(x => x.JobCount,  jobCount)
                 .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
+    public async Task<int> RecoverOrphanedFetchRunsAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.JobFetchRuns
+            .Where(r => r.Status == "Running")
+            .ExecuteUpdateAsync(r => r
+                .SetProperty(x => x.Status,       "Failed")
+                .SetProperty(x => x.ErrorMessage, "Orphaned by app restart — marked Failed on startup.")
+                .SetProperty(x => x.CompletedAt,  DateTime.UtcNow),
             cancellationToken);
     }
 
