@@ -78,6 +78,12 @@ builder.Services.AddHttpClient("Arbeitnow", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 JobAggregator");
     c.DefaultRequestHeaders.Add("Accept", "application/json");
 });
+builder.Services.AddHttpClient("Lever", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 jobs-aggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<JobCancellationRegistry>();

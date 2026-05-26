@@ -66,8 +66,7 @@ public partial class LeverJobsJobHandler : IJobHandler
             var tokens = await fetchDa.GetActiveLeverTokensAsync(cancellationToken);
             _logger.LogInformation("[Lever] Loaded {Count} board tokens", tokens.Count);
 
-            var client = _http.CreateClient();
-            client.DefaultRequestHeaders.Add("User-Agent", "CareerPanda/1.0 jobs-aggregator");
+            var client = _http.CreateClient("Lever");
 
             for (int i = 0; i < tokens.Count; i++)
             {
@@ -102,6 +101,7 @@ public partial class LeverJobsJobHandler : IJobHandler
                 {
                     totalErrors++;
                     _logger.LogWarning(ex, "[Lever] Failed processing {Company}", token.CompanyName);
+                    await fetchDa.UpdateLeverTokenStatusAsync(token.Id, "INVALID", 0, 0, cancellationToken);
                 }
 
                 companiesProcessed++;
@@ -196,9 +196,8 @@ public partial class LeverJobsJobHandler : IJobHandler
 
         if (!resp.IsSuccessStatusCode)
         {
-            var status = (int)resp.StatusCode == 404 ? "INVALID" : "UNKNOWN";
             _logger.LogWarning("[Lever] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
-            return ([], httpCode, status, 0);
+            return ([], httpCode, "INVALID", 0);
         }
 
         var jobs = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
@@ -258,6 +257,10 @@ public partial class LeverJobsJobHandler : IJobHandler
                 isInternship = c.Contains("intern", StringComparison.OrdinalIgnoreCase);
             }
         }
+
+        // Skip jobs explicitly located outside the US
+        if (!string.IsNullOrEmpty(country) && !UsCountryVariants.Contains(country))
+            return null;
 
         // ── Description ───────────────────────────────────────────────────────
         string? desc = null;
@@ -324,8 +327,36 @@ public partial class LeverJobsJobHandler : IJobHandler
 
     // ── Location parsing ──────────────────────────────────────────────────────
 
-    [GeneratedRegex(@"\b[A-Z]{2}\b")]
-    private static partial Regex StateAbbrRegex();
+    // Exact set of US state + territory 2-letter abbreviations.
+    // Using a whitelist instead of a generic [A-Z]{2} regex prevents foreign codes
+    // like UK, AU, IN, DE from being mistaken for US states.
+    private static readonly HashSet<string> UsStateAbbrs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+        "VA","WA","WV","WI","WY",
+        "DC","PR","GU","VI","AS","MP"
+    };
+
+    private static readonly HashSet<string> UsStateNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
+        "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
+        "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
+        "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada",
+        "New Hampshire","New Jersey","New Mexico","New York","North Carolina",
+        "North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
+        "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
+        "Virginia","Washington","West Virginia","Wisconsin","Wyoming",
+        "District of Columbia","Washington DC","Washington D.C.",
+        "D.C.","Puerto Rico","Guam","Virgin Islands","American Samoa"
+    };
+
+    private static readonly HashSet<string> UsCountryVariants = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "US", "USA", "U.S.", "U.S.A.", "United States", "United States of America"
+    };
 
     private static void ParseLocation(
         string raw, out string? city, out string? state,
@@ -354,18 +385,26 @@ public partial class LeverJobsJobHandler : IJobHandler
 
         var parts = raw.Split(',', StringSplitOptions.TrimEntries);
         if (parts.Length >= 1) city = parts[0];
+
         if (parts.Length >= 2)
         {
             var part2 = parts[1].Trim();
-            if (part2.Length > 3 && !StateAbbrRegex().IsMatch(part2))
-                country = part2;
-            else
-                state = part2;
-        }
-        if (parts.Length >= 3)
-            country = parts[2].Trim();
 
-        if (state == null && country == "US" && parts.Length >= 2)
-            country = parts[1].Trim();
+            if (UsStateAbbrs.Contains(part2))
+                state = part2;                          // exact US state abbr (AL, CA, NY…)
+            else if (UsStateNames.Contains(part2))
+                state = part2;                          // full US state name (Texas, California…)
+            else if (UsCountryVariants.Contains(part2))
+                { /* country already "US" */ }          // USA, U.S., United States…
+            else if (part2.Length > 2)
+                country = part2;                        // anything else → treat as foreign country
+            // 1-2 char tokens that aren't a known US abbr are ignored
+        }
+
+        if (parts.Length >= 3)
+        {
+            var part3 = parts[2].Trim();
+            country = UsCountryVariants.Contains(part3) ? "US" : part3;
+        }
     }
 }
