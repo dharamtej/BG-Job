@@ -86,7 +86,12 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
 
                 try
                 {
-                    var jobs = await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+                    var (jobs, httpCode, tokenStatus, jobCount) =
+                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+
+                    // null = transient error — leave status unchanged so it retries next run
+                    if (tokenStatus != null)
+                        await fetchDa.UpdateGreenhouseTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
 
                     if (jobs.Count > 0)
                     {
@@ -100,8 +105,9 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    // Transient error (timeout, DNS) — don't touch status, will retry next run
                     totalErrors++;
-                    _logger.LogWarning(ex, "[Greenhouse] Failed processing {Company}", token.CompanyName);
+                    _logger.LogWarning(ex, "[Greenhouse] Transient error {Company} — status unchanged", token.CompanyName);
                 }
 
                 companiesProcessed++;
@@ -182,35 +188,47 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
     }
 
     // ── Per-company fetch: list jobs → detail each job ───────────────────────
+    // tokenStatus = null means transient error — caller must NOT update the token status
 
-    private async Task<List<ApiRawJob>> FetchCompanyJobsAsync(
-        HttpClient client,
-        ApiGreenhouseBoardToken token,
-        string fetchRunId,
-        bool isH1B,
-        CancellationToken ct)
+    private async Task<(List<ApiRawJob> jobs, short httpCode, string? tokenStatus, int jobCount)>
+        FetchCompanyJobsAsync(
+            HttpClient client,
+            ApiGreenhouseBoardToken token,
+            string fetchRunId,
+            bool isH1B,
+            CancellationToken ct)
     {
         // Step 1: get job list (id + basic fields) — no auth required
         var listUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}/jobs";
         using var listResp = await client.GetAsync(listUrl, ct);
+        var httpCode = (short)listResp.StatusCode;
 
         if (!listResp.IsSuccessStatusCode)
         {
             _logger.LogWarning("[Greenhouse] {Status} fetching job list for {Token}",
                 (int)listResp.StatusCode, token.BoardToken);
-            return [];
+
+            // Definitive failures
+            if (listResp.StatusCode is System.Net.HttpStatusCode.NotFound
+                                    or System.Net.HttpStatusCode.Forbidden
+                                    or System.Net.HttpStatusCode.Unauthorized)
+                return ([], httpCode, "INVALID", 0);
+
+            // Transient (5xx, 429) — leave status unchanged
+            return ([], httpCode, null, 0);
         }
 
         var listJson = await listResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
         if (!listJson.TryGetProperty("jobs", out var jobsEl) || jobsEl.ValueKind != JsonValueKind.Array)
-            return [];
+            return ([], httpCode, "INVALID", 0);
 
         var jobIds = jobsEl.EnumerateArray()
             .Where(j => j.TryGetProperty("id", out _))
             .Select(j => j.GetProperty("id").GetInt64())
             .ToList();
 
-        if (jobIds.Count == 0) return [];
+        if (jobIds.Count == 0)
+            return ([], httpCode, "EMPTY", 0);
 
         _logger.LogInformation("[Greenhouse] {Company}: {Count} jobs to fetch", token.CompanyName, jobIds.Count);
 
@@ -239,7 +257,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             }
         }
 
-        return results;
+        return (results, httpCode, results.Count > 0 ? "VALID" : "EMPTY", jobIds.Count);
     }
 
     // ── Field mapping ─────────────────────────────────────────────────────────

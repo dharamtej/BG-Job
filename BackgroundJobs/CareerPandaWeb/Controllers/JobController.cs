@@ -253,7 +253,7 @@ public class JobController : CoreController
         },
         "GreenhouseJobs" => new
         {
-            Name        = "Fetch Greenhouse Jobs — All 664 Board Tokens",
+            Name        = "Fetch Greenhouse Jobs — All Board Tokens",
             JobType     = "GreenhouseJobs",
             Description = """{}"""
         },
