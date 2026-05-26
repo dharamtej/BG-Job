@@ -269,6 +269,12 @@ public class JobController : CoreController
             JobType     = "WorkdayJobs",
             Description = """{}"""
         },
+        "AshbyJobs" => new
+        {
+            Name        = "Fetch Ashby Jobs — All 2985 Board Tokens",
+            JobType     = "AshbyJobs",
+            Description = """{}"""
+        },
         _ => new
         {
             Name        = jobType,

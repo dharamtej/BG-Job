@@ -439,6 +439,27 @@ public class JobFetchDAPostgres : IJobFetchDA
             cancellationToken);
     }
 
+    public async Task<List<ApiAshbyBoardToken>> GetActiveAshbyTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.AshbyBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status != "INVALID")
+            .OrderBy(t => t.CompanyName)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateAshbyTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
+    {
+        await _db.AshbyBoardTokens
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(t => t
+                .SetProperty(x => x.Status,    status)
+                .SetProperty(x => x.HttpCode,  httpCode)
+                .SetProperty(x => x.JobCount,  jobCount)
+                .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
     public async Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default)
     {
         return await _db.H1bSponsors

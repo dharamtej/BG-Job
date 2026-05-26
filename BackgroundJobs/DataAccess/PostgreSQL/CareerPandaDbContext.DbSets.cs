@@ -11,6 +11,7 @@ public partial class CareerPandaDbContext
     public DbSet<ApiGreenhouseBoardToken> GreenhouseBoardTokens { get; set; } = null!;
     public DbSet<ApiLeverBoardToken> LeverBoardTokens { get; set; } = null!;
     public DbSet<ApiWorkdayBoardToken> WorkdayBoardTokens { get; set; } = null!;
+    public DbSet<ApiAshbyBoardToken> AshbyBoardTokens { get; set; } = null!;
     public DbSet<ApiH1bSponsor> H1bSponsors { get; set; } = null!;
     public DbSet<ApiRawJob> RawJobs { get; set; } = null!;
     public DbSet<CpAgentAssignment> AgentAssignments { get; set; } = null!;

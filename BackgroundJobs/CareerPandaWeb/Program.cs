@@ -146,6 +146,7 @@ builder.Services.AddSingleton<IJobHandler, JobicyJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, GreenhouseJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, LeverJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, WorkdayJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, AshbyJobsJobHandler>();
 // builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
 builder.Services.AddHostedService<BackgroundJobWorker>();
 

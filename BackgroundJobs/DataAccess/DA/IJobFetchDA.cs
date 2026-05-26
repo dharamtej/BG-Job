@@ -46,6 +46,10 @@ public interface IJobFetchDA
     Task<List<ApiWorkdayBoardToken>> GetActiveWorkdayTokensAsync(CancellationToken cancellationToken = default);
     Task UpdateWorkdayTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
 
+    // ── Ashby ───────────────────────────────────────────────────────────────
+    Task<List<ApiAshbyBoardToken>> GetActiveAshbyTokensAsync(CancellationToken cancellationToken = default);
+    Task UpdateAshbyTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
+
     // ── H1B Sponsors ────────────────────────────────────────────────────────
     Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default);
     Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default);

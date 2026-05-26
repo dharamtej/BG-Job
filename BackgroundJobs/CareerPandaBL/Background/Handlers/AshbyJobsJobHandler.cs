@@ -1,0 +1,553 @@
+// CareerPandaBL/Background/Handlers/AshbyJobsJobHandler.cs
+// SOURCE : Ashby Public Job Board API (no auth required)
+// FLOW   : Load board tokens from api.ashby_board_tokens (status != INVALID)
+//          → GET https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=true
+//          → Update token status (VALID / EMPTY / INVALID) based on response
+//          → Upsert into api.raw_jobs
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using CareerPanda.DataAccess.DA;
+using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.Framework.Cache;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace CareerPanda.BL.Background.Handlers;
+
+public partial class AshbyJobsJobHandler : IJobHandler
+{
+    public string JobType => "AshbyJobs";
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IHttpClientFactory _http;
+    private readonly ICacheService _cache;
+    private readonly ILogger<AshbyJobsJobHandler> _logger;
+
+    public AshbyJobsJobHandler(
+        IServiceScopeFactory scopeFactory,
+        IHttpClientFactory httpClientFactory,
+        ICacheService cacheService,
+        ILogger<AshbyJobsJobHandler> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _http         = httpClientFactory;
+        _cache        = cacheService;
+        _logger       = logger;
+    }
+
+    public async Task ExecuteAsync(
+        JobWorkRequest request,
+        IJobProgressReporter progress,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var fetchDa     = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+
+        var run = new ApiJobFetchRun
+        {
+            Id               = request.JobId,
+            BackgroundTaskId = request.JobId,
+            JobCategory      = "AshbyJobs",
+            ApiSource        = "Ashby",
+            Status           = "Running",
+            StartedAt        = DateTime.UtcNow,
+            CreatedById      = request.UserId
+        };
+        await fetchDa.CreateFetchRunAsync(run);
+
+        int totalFetched = 0, totalInserted = 0, totalUpdated = 0, totalErrors = 0, companiesProcessed = 0;
+
+        try
+        {
+            var sponsors = await LoadSponsorsAsync(fetchDa, cancellationToken);
+            _logger.LogInformation("[Ashby] Loaded {Count} H1B sponsors for matching", sponsors.Count);
+
+            var tokens = await fetchDa.GetActiveAshbyTokensAsync(cancellationToken);
+            _logger.LogInformation("[Ashby] Loaded {Count} board tokens", tokens.Count);
+
+            var client = _http.CreateClient("Ashby");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "CareerPanda/1.0 jobs-aggregator");
+
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+
+                var token = tokens[i];
+                bool isH1B = IsH1BSponsored(token.CompanyName, sponsors);
+
+                _logger.LogInformation(
+                    "[Ashby] [{I}/{Total}] Processing {Company} ({Token}) H1B={H1B}",
+                    i + 1, tokens.Count, token.CompanyName, token.BoardToken, isH1B);
+
+                try
+                {
+                    var (jobs, httpCode, tokenStatus, jobCount) =
+                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+
+                    if (tokenStatus != null)
+                        await fetchDa.UpdateAshbyTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+
+                    if (jobs.Count > 0)
+                    {
+                        totalFetched += jobs.Count;
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        totalInserted += ins;
+                        totalUpdated  += upd;
+                        totalErrors   += err;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    totalErrors++;
+                    _logger.LogWarning(ex, "[Ashby] Transient error {Company} — status unchanged", token.CompanyName);
+                }
+
+                companiesProcessed++;
+
+                if (companiesProcessed % 10 == 0 || i == tokens.Count - 1)
+                {
+                    await fetchDa.UpdateFetchRunStatsAsync(
+                        run.Id, totalFetched, totalInserted, totalUpdated, 0, totalErrors, companiesProcessed);
+
+                    int pct = (int)((double)(i + 1) / tokens.Count * 90);
+                    await progress.ReportProgressAsync(pct,
+                        $"Companies: {companiesProcessed}/{tokens.Count} — Inserted: {totalInserted}, Updated: {totalUpdated}");
+                }
+
+                if (i < tokens.Count - 1)
+                    await Task.Delay(200, cancellationToken);
+            }
+
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
+        }
+        catch (OperationCanceledException)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "[Ashby] Done — Companies={C} Fetched={F} Inserted={I} Updated={U} Errors={E}",
+            companiesProcessed, totalFetched, totalInserted, totalUpdated, totalErrors);
+    }
+
+    // ── H1B sponsor check ─────────────────────────────────────────────────────
+
+    private async Task<HashSet<string>> LoadSponsorsAsync(IJobFetchDA fetchDa, CancellationToken ct)
+    {
+        var cached = await _cache.GetAsync<List<string>>(SponsorCacheWarmupService.CacheKey, ct);
+        if (cached is { Count: > 0 })
+            return BuildSponsorSet(cached);
+
+        var names = await fetchDa.GetH1BSponsorNamesAsync(ct);
+        await _cache.SetAsync(SponsorCacheWarmupService.CacheKey, names, SponsorCacheWarmupService.CacheTtl, ct);
+        _logger.LogInformation("[Ashby] Reloaded {Count} H1B sponsors from DB into cache", names.Count);
+        return BuildSponsorSet(names);
+    }
+
+    private static HashSet<string> BuildSponsorSet(List<string> names)
+    {
+        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
+        return set;
+    }
+
+    private static bool IsH1BSponsored(string companyName, HashSet<string> sponsors) =>
+        sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName));
+
+    private static readonly string[] LegalSuffixes =
+        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
+
+    [GeneratedRegex(@"[^\w\s]")]
+    private static partial Regex NonWordChars();
+
+    private static string NormalizeCompanyName(string name)
+    {
+        var upper    = name.ToUpperInvariant();
+        var stripped = NonWordChars().Replace(upper, " ");
+        var parts    = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int count    = parts.Length;
+        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
+        return string.Join(' ', parts, 0, count);
+    }
+
+    // ── Per-company fetch ─────────────────────────────────────────────────────
+    // tokenStatus = null means transient error — caller must NOT update the token status
+
+    private async Task<(List<ApiRawJob> jobs, short httpCode, string? tokenStatus, int jobCount)>
+        FetchCompanyJobsAsync(
+            HttpClient client,
+            ApiAshbyBoardToken token,
+            string fetchRunId,
+            bool isH1B,
+            CancellationToken ct)
+    {
+        // Ashby returns full job details (incl. compensation) in a single call
+        var url = $"https://api.ashbyhq.com/posting-api/job-board/{token.BoardToken}?includeCompensation=true";
+        using var resp = await client.GetAsync(url, ct);
+
+        var httpCode = (short)resp.StatusCode;
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("[Ashby] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
+
+            if (resp.StatusCode is HttpStatusCode.NotFound
+                                or HttpStatusCode.Forbidden
+                                or HttpStatusCode.Unauthorized
+                                or HttpStatusCode.BadRequest)
+                return ([], httpCode, "INVALID", 0);
+
+            return ([], httpCode, null, 0);
+        }
+
+        var doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+
+        if (doc.ValueKind != JsonValueKind.Object
+            || !doc.TryGetProperty("jobs", out var jobsEl)
+            || jobsEl.ValueKind != JsonValueKind.Array)
+            return ([], httpCode, "INVALID", 0);
+
+        var jobArray = jobsEl.EnumerateArray().ToList();
+        if (jobArray.Count == 0)
+            return ([], httpCode, "EMPTY", 0);
+
+        _logger.LogInformation("[Ashby] {Company}: {Count} jobs", token.CompanyName, jobArray.Count);
+
+        var results = new List<ApiRawJob>(jobArray.Count);
+        foreach (var j in jobArray)
+        {
+            var mapped = MapJob(j, token, fetchRunId, isH1B);
+            if (mapped != null) results.Add(mapped);
+        }
+
+        return (results, httpCode, results.Count > 0 ? "VALID" : "EMPTY", jobArray.Count);
+    }
+
+    // ── Field mapping ─────────────────────────────────────────────────────────
+
+    private static ApiRawJob? MapJob(JsonElement d, ApiAshbyBoardToken token, string fetchRunId, bool isH1B)
+    {
+        if (!d.TryGetProperty("id", out var idEl)) return null;
+        var sourceId = idEl.GetString();
+        if (string.IsNullOrEmpty(sourceId)) return null;
+
+        // Only return jobs that are listed (drafts/unlisted are excluded)
+        if (d.TryGetProperty("isListed", out var listed)
+            && listed.ValueKind == JsonValueKind.False)
+            return null;
+
+        var jobTitle = d.TryGetProperty("title", out var t) ? t.GetString() ?? "Untitled" : "Untitled";
+        var jobLink  = d.TryGetProperty("jobUrl", out var ju) ? ju.GetString()
+                     : d.TryGetProperty("applyUrl", out var au) ? au.GetString()
+                     : null;
+
+        // ── Location ──────────────────────────────────────────────────────────
+        // Collect primary + secondary locations; accept the first one that parses to US.
+        bool isRemote = d.TryGetProperty("isRemote", out var rem) && rem.ValueKind == JsonValueKind.True;
+
+        var locCandidates = new List<string>();
+        if (d.TryGetProperty("location", out var locEl) && locEl.ValueKind == JsonValueKind.String)
+        {
+            var s = locEl.GetString();
+            if (!string.IsNullOrWhiteSpace(s)) locCandidates.Add(s);
+        }
+        if (d.TryGetProperty("secondaryLocations", out var secLocs) && secLocs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var sl in secLocs.EnumerateArray())
+            {
+                if (sl.TryGetProperty("location", out var slLoc) && slLoc.ValueKind == JsonValueKind.String)
+                {
+                    var s = slLoc.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) locCandidates.Add(s);
+                }
+            }
+        }
+
+        string? city = null, state = null, country = "US";
+        var workType    = isRemote ? "Remote" : "OnSite";
+        var jobWorkMode = isRemote ? "Remote" : "OnSite";
+
+        bool foundUs = false;
+        foreach (var cand in locCandidates)
+        {
+            ParseLocation(cand, isRemote,
+                out var cCity, out var cState, out var cCountry,
+                out var cWork, out var cMode);
+
+            if (UsCountryVariants.Contains(cCountry ?? "US") || cState != null)
+            {
+                city = cCity; state = cState; country = "US";
+                workType = cWork; jobWorkMode = cMode;
+                foundUs = true;
+                break;
+            }
+        }
+
+        // Skip postings with no US location AND not explicitly remote-US.
+        if (!foundUs)
+        {
+            // If isRemote=true and there are no locations at all, treat as US-remote (Ashby convention for global remote rarely sets isRemote without a hint — but be lenient).
+            if (isRemote && locCandidates.Count == 0)
+            {
+                country = "US";
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        // ── Department ────────────────────────────────────────────────────────
+        string? department = null;
+        if (d.TryGetProperty("department", out var deptEl) && deptEl.ValueKind == JsonValueKind.String)
+            department = deptEl.GetString();
+        string? team = null;
+        if (d.TryGetProperty("team", out var teamEl) && teamEl.ValueKind == JsonValueKind.String)
+            team = teamEl.GetString();
+
+        // ── Employment type ───────────────────────────────────────────────────
+        bool isContract   = false;
+        bool isInternship = false;
+        if (d.TryGetProperty("employmentType", out var etEl) && etEl.ValueKind == JsonValueKind.String)
+        {
+            var et = etEl.GetString() ?? "";
+            if (et.Contains("Contract", StringComparison.OrdinalIgnoreCase) ||
+                et.Contains("Temporary", StringComparison.OrdinalIgnoreCase))
+                isContract = true;
+            if (et.Contains("Intern", StringComparison.OrdinalIgnoreCase))
+                isInternship = true;
+        }
+
+        // ── Description ───────────────────────────────────────────────────────
+        string? desc = null;
+        if (d.TryGetProperty("descriptionHtml", out var dh) && dh.ValueKind == JsonValueKind.String)
+            desc = dh.GetString();
+        else if (d.TryGetProperty("descriptionPlain", out var dp) && dp.ValueKind == JsonValueKind.String)
+            desc = dp.GetString();
+
+        // ── H1B keyword fallback ──────────────────────────────────────────────
+        var isH1BFinal = isH1B ||
+            (desc != null && (desc.Contains("h1b", StringComparison.OrdinalIgnoreCase) ||
+                              desc.Contains("h-1b", StringComparison.OrdinalIgnoreCase) ||
+                              desc.Contains("visa sponsor", StringComparison.OrdinalIgnoreCase)));
+
+        // ── Compensation ──────────────────────────────────────────────────────
+        decimal? salMin = null, salMax = null;
+        string?  salCurrency = "USD", salType = null, salRangeText = null;
+        if (d.TryGetProperty("compensation", out var comp) && comp.ValueKind == JsonValueKind.Object)
+        {
+            if (comp.TryGetProperty("summaryComponents", out var sc) && sc.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var sum in sc.EnumerateArray())
+                {
+                    var compType = sum.TryGetProperty("compensationType", out var ct) ? ct.GetString() : null;
+                    if (!string.Equals(compType, "Salary", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    if (sum.TryGetProperty("minValue", out var mn) && mn.ValueKind == JsonValueKind.Number)
+                        salMin = mn.GetDecimal();
+                    if (sum.TryGetProperty("maxValue", out var mx) && mx.ValueKind == JsonValueKind.Number)
+                        salMax = mx.GetDecimal();
+                    if (sum.TryGetProperty("currencyCode", out var cc) && cc.ValueKind == JsonValueKind.String)
+                        salCurrency = cc.GetString() ?? "USD";
+                    if (sum.TryGetProperty("interval", out var iv) && iv.ValueKind == JsonValueKind.String)
+                    {
+                        var ivStr = iv.GetString() ?? "";
+                        salType = ivStr.Contains("year", StringComparison.OrdinalIgnoreCase) ? "Annual"
+                                : ivStr.Contains("hour", StringComparison.OrdinalIgnoreCase) ? "Hourly"
+                                : ivStr.Contains("month", StringComparison.OrdinalIgnoreCase) ? "Monthly"
+                                : null;
+                    }
+                    break;
+                }
+                if (salMin.HasValue && salMax.HasValue)
+                    salRangeText = salType == "Hourly"
+                        ? $"${salMin:N0}–${salMax:N0}/hr"
+                        : $"${salMin:N0}–${salMax:N0}/yr";
+            }
+
+            // Fallback: free-text "compensationTierSummary" like "$120K – $160K"
+            if (!salMin.HasValue && comp.TryGetProperty("compensationTierSummary", out var tier)
+                && tier.ValueKind == JsonValueKind.String)
+            {
+                var tierStr = tier.GetString();
+                if (!string.IsNullOrWhiteSpace(tierStr))
+                {
+                    salRangeText = tierStr;
+                    var (pMin, pMax) = ParseCompTierSummary(tierStr);
+                    salMin = pMin; salMax = pMax;
+                    if (salMin.HasValue) salType ??= "Annual";
+                }
+            }
+        }
+
+        // ── Post date ─────────────────────────────────────────────────────────
+        DateTime? postDate = null;
+        if (d.TryGetProperty("publishedAt", out var pa) && pa.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(pa.GetString(), out var pdt))
+            postDate = pdt.ToUniversalTime();
+        else if (d.TryGetProperty("updatedAt", out var ua) && ua.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(ua.GetString(), out var udt))
+            postDate = udt.ToUniversalTime();
+
+        var skills = (department, team) switch
+        {
+            (not null, not null) => new[] { department, team },
+            (not null, null)     => new[] { department },
+            (null, not null)     => new[] { team },
+            _ => null
+        };
+
+        return new ApiRawJob
+        {
+            PublicId        = Guid.NewGuid().ToString("N"),
+            Source          = "Ashby",
+            SourceId        = sourceId,
+            FetchRunId      = fetchRunId,
+            JobTitle        = jobTitle,
+            JobLink         = jobLink,
+            JobDescription  = desc,
+            City            = city,
+            State           = state,
+            Country         = country ?? "US",
+            PostDate        = postDate,
+            HoursBackPosted = postDate.HasValue ? (int)(DateTime.UtcNow - postDate.Value).TotalHours : null,
+            SalaryMin       = salMin,
+            SalaryMax       = salMax,
+            SalaryType      = salType,
+            SalaryRangeText = salRangeText,
+            SalaryCurrency  = salCurrency,
+            WorkType        = workType,
+            JobWorkMode     = jobWorkMode,
+            Industry        = token.Industry ?? department,
+            Skills          = skills,
+            ApplyType       = "ExternalApply",
+            CompanyName     = token.CompanyName,
+            CompanyUrl      = token.BoardUrl,
+            CompanyType     = "Private",
+            IsH1BSponsored  = isH1BFinal,
+            IsSponsored     = isH1BFinal,
+            IsW2            = null,
+            IsC2C           = false,
+            IsContractJob   = isContract,
+            IsFreelanceJob  = false,
+            IsPrimeVendor   = false,
+            IsStaffing      = false,
+            IsStartupJob    = false,
+            IsNonProfitJob  = false,
+            IsUniversityJob = isInternship,
+            Status          = true,
+            CreatedOn       = DateTime.UtcNow,
+            UpdatedOn       = DateTime.UtcNow
+        };
+    }
+
+    // ── Compensation tier summary parsing ─────────────────────────────────────
+    // Matches "$120K – $160K", "$120,000 - $160,000", "$50/hr - $75/hr"
+    [GeneratedRegex(@"\$?\s*([\d,]+(?:\.\d+)?)\s*([KkMm])?\s*[-–—]\s*\$?\s*([\d,]+(?:\.\d+)?)\s*([KkMm])?")]
+    private static partial Regex CompRangeRegex();
+
+    private static (decimal? min, decimal? max) ParseCompTierSummary(string s)
+    {
+        var m = CompRangeRegex().Match(s);
+        if (!m.Success) return (null, null);
+
+        decimal Scale(string num, string suffix)
+        {
+            if (!decimal.TryParse(num.Replace(",", ""), out var v)) return 0;
+            return suffix.ToUpperInvariant() switch
+            {
+                "K" => v * 1_000m,
+                "M" => v * 1_000_000m,
+                _   => v
+            };
+        }
+
+        var min = Scale(m.Groups[1].Value, m.Groups[2].Value);
+        var max = Scale(m.Groups[3].Value, m.Groups[4].Value);
+        return (min > 0 ? min : null, max > 0 ? max : null);
+    }
+
+    // ── Location parsing ──────────────────────────────────────────────────────
+
+    private static readonly HashSet<string> UsStateAbbrs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+        "VA","WA","WV","WI","WY",
+        "DC","PR","GU","VI","AS","MP"
+    };
+
+    private static readonly HashSet<string> UsStateNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
+        "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
+        "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
+        "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada",
+        "New Hampshire","New Jersey","New Mexico","New York","North Carolina",
+        "North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
+        "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
+        "Virginia","Washington","West Virginia","Wisconsin","Wyoming",
+        "District of Columbia","Washington DC","Washington D.C.",
+        "D.C.","Puerto Rico","Guam","Virgin Islands","American Samoa"
+    };
+
+    private static readonly HashSet<string> UsCountryVariants = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "US", "USA", "U.S.", "U.S.A.", "United States", "United States of America"
+    };
+
+    private static void ParseLocation(
+        string raw, bool isRemoteFlag,
+        out string? city, out string? state, out string? country,
+        out string workType, out string jobWorkMode)
+    {
+        city        = null;
+        state       = null;
+        country     = "US";
+        workType    = isRemoteFlag ? "Remote" : "OnSite";
+        jobWorkMode = isRemoteFlag ? "Remote" : "OnSite";
+
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        var lower = raw.ToLowerInvariant();
+        if (lower.Contains("remote"))
+        {
+            workType    = "Remote";
+            jobWorkMode = "Remote";
+            if (!lower.Contains(',')) return;
+        }
+        else if (lower.Contains("hybrid"))
+        {
+            workType    = "Hybrid";
+            jobWorkMode = "Hybrid";
+        }
+
+        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
+        if (parts.Length >= 1) city = parts[0];
+
+        if (parts.Length >= 2)
+        {
+            var part2 = parts[1].Trim();
+            if (UsStateAbbrs.Contains(part2))            state = part2;
+            else if (UsStateNames.Contains(part2))       state = part2;
+            else if (UsCountryVariants.Contains(part2))  { /* country already US */ }
+            else if (part2.Length > 2)                   country = part2;
+        }
+
+        if (parts.Length >= 3)
+        {
+            var part3 = parts[2].Trim();
+            country = UsCountryVariants.Contains(part3) ? "US" : part3;
+        }
+    }
+}
