@@ -7,6 +7,7 @@
 //        its own api.job_fetch_runs row (fresh JobId) so it shows up individually
 //        under GET /api/fetchjobs/runs. A failure in one child is logged and the
 //        chain continues with the next.
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace CareerPanda.BL.Background.Handlers;
@@ -42,15 +43,17 @@ public class RunAllJobsJobHandler : IJobHandler
         "H1BSponsorEnrichment",   // Wikipedia lookups — free
     ];
 
-    private readonly IEnumerable<IJobHandler> _handlers;
+    // Resolve handlers lazily (not via constructor) — injecting IEnumerable<IJobHandler>
+    // here would create a circular dependency, since this type is itself an IJobHandler.
+    private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<RunAllJobsJobHandler> _logger;
 
     public RunAllJobsJobHandler(
-        IEnumerable<IJobHandler> handlers,
+        IServiceProvider serviceProvider,
         ILogger<RunAllJobsJobHandler> logger)
     {
-        _handlers = handlers;
-        _logger   = logger;
+        _serviceProvider = serviceProvider;
+        _logger          = logger;
     }
 
     public async Task ExecuteAsync(
@@ -58,6 +61,7 @@ public class RunAllJobsJobHandler : IJobHandler
         IJobProgressReporter progress,
         CancellationToken cancellationToken)
     {
+        var handlers   = _serviceProvider.GetServices<IJobHandler>();
         int total      = ChildJobTypes.Length;
         int succeeded  = 0, failed = 0, skipped = 0;
 
@@ -68,7 +72,7 @@ public class RunAllJobsJobHandler : IJobHandler
             cancellationToken.ThrowIfCancellationRequested();
 
             var childType = ChildJobTypes[i];
-            var handler   = _handlers.FirstOrDefault(h =>
+            var handler   = handlers.FirstOrDefault(h =>
                 h.JobType.Equals(childType, StringComparison.OrdinalIgnoreCase));
 
             if (handler == null)
