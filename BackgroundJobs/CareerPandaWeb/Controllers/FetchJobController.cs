@@ -139,6 +139,48 @@ public class FetchJobController : CoreController
     public Task<FrameworkResponse> TriggerH1BSponsorEnrichment([FromBody] JobFetchInput? input) =>
         TriggerFetch("h1bsponorenrichment", input);
 
+    /// <summary>
+    /// Trigger all FREE/unlimited job fetches in sequence within a single task: the ATS
+    /// board-token sources (Lever → … → Recruitee → Greenhouse last), then Adzuna, Government, RemoteOK,
+    /// Jobicy, Startup, NonProfit, then H1B sponsor enrichment last. JSearch-quota sources
+    /// (AllJobs, Contract, H1B, PrimeVendor) are excluded.
+    /// Each runs to completion before the next starts, and each records its own fetch run.
+    /// Returns immediately with the chain's task ID; poll GET /api/fetchjobs/run/{runId} for overall progress.
+    /// </summary>
+    [HttpPost]
+    [Route("api/fetchjobs/runalljobs/run")]
+    public Task<FrameworkResponse> TriggerRunAllJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("runalljobs", input);
+
+    // ── Dashboard stats ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// High-level dashboard summary: total jobs, active jobs, total/new companies,
+    /// classification-flag counts (H1B, Sponsored, W2, C2C, Contract, Freelance,
+    /// PrimeVendor, Staffing, Startup, NonProfit, University), and jobs-by-source.
+    /// </summary>
+    [HttpGet]
+    [Route("api/fetchjobs/stats/overview")]
+    public async Task<FrameworkResponse> GetStatsOverview([FromQuery] int newCompanyWindowHours = 24)
+    {
+        ApplicationContext.CorrelationId = Guid.NewGuid().ToString();
+        ApplicationContext.UserId        = UserId;
+        return await _fetchBl.GetStatsOverviewAsync(newCompanyWindowHours);
+    }
+
+    /// <summary>
+    /// Per-handler roll-up: for each source — total/active jobs, distinct companies,
+    /// classification-flag counts, and the latest fetch run's status + stats.
+    /// </summary>
+    [HttpGet]
+    [Route("api/fetchjobs/stats/byhandler")]
+    public async Task<FrameworkResponse> GetStatsByHandler()
+    {
+        ApplicationContext.CorrelationId = Guid.NewGuid().ToString();
+        ApplicationContext.UserId        = UserId;
+        return await _fetchBl.GetStatsByHandlerAsync();
+    }
+
     // ── Status & monitoring ────────────────────────────────────────────────────
 
     /// <summary>

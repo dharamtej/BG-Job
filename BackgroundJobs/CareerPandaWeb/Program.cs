@@ -156,6 +156,7 @@ builder.Services.AddSingleton<IJobHandler, AshbyJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, BambooHrJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, IcimsJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RecruiteeJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>(); // Meta: runs all fetch handlers sequentially
 // builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
 builder.Services.AddHostedService<BackgroundJobWorker>();
 

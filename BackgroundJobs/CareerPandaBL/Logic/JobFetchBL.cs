@@ -26,7 +26,15 @@ public class JobFetchBL
             { "remoteoknobs",         "RemoteOkJobs"         },
             { "jobicyjobs",           "JobicyJobs"           },
             { "adzunajobs",           "AdzunaJobs"           },
-            { "h1bsponorenrichment",  "H1BSponsorEnrichment" }
+            { "h1bsponorenrichment",  "H1BSponsorEnrichment" },
+            { "greenhousejobs",       "GreenhouseJobs"       },
+            { "leverjobs",            "LeverJobs"            },
+            { "ashbyjobs",            "AshbyJobs"            },
+            { "workdayjobs",          "WorkdayJobs"          },
+            { "icimsjobs",            "IcimsJobs"            },
+            { "bamboohrjobs",         "BambooHrJobs"         },
+            { "recruiteejobs",        "RecruiteeJobs"        },
+            { "runalljobs",           "RunAllJobs"           }
         };
 
     private readonly JobBL _jobBl;
@@ -71,6 +79,20 @@ public class JobFetchBL
 
     public Task<FrameworkResponse> GetFetchRunAsync(string runId) =>
         _fetchDa.GetFetchRunAsync(runId);
+
+    // ── Dashboard stats ─────────────────────────────────────────────────────
+
+    public async Task<FrameworkResponse> GetStatsOverviewAsync(int newCompanyWindowHours)
+    {
+        var overview = await _fetchDa.GetStatsOverviewAsync(newCompanyWindowHours);
+        return new FrameworkResponse { Status = Status.Success, Entity = overview };
+    }
+
+    public async Task<FrameworkResponse> GetStatsByHandlerAsync()
+    {
+        var handlers = await _fetchDa.GetStatsByHandlerAsync();
+        return new FrameworkResponse { Status = Status.Success, Entity = handlers };
+    }
 
     public Task<FrameworkResponse> GetFetchRunsAsync(
         int pageNumber, int pageSize,

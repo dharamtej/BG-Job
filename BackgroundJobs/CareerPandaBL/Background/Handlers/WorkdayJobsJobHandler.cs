@@ -12,6 +12,7 @@ using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
 using CareerPanda.Framework.Cache;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -28,16 +29,25 @@ public class WorkdayJobsJobHandler : IJobHandler
     private readonly ICacheService _cache;
     private readonly ILogger<WorkdayJobsJobHandler> _logger;
 
+    // How many sites are processed concurrently — tunable via appsettings.
+    // Workday rate-limits per-tenant, and each site is its own tenant host, so
+    // concurrency across sites is safe; pages within one site stay sequential.
+    private readonly int _siteParallel;
+
     public WorkdayJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         ICacheService cacheService,
+        IConfiguration configuration,
         ILogger<WorkdayJobsJobHandler> logger)
     {
         _scopeFactory = scopeFactory;
         _http         = httpClientFactory;
         _cache        = cacheService;
         _logger       = logger;
+
+        _siteParallel = Math.Max(1,
+            configuration.GetSection("JobApiSettings").GetValue("WorkdaySiteParallel", 8));
     }
 
     public async Task ExecuteAsync(
@@ -45,9 +55,6 @@ public class WorkdayJobsJobHandler : IJobHandler
         IJobProgressReporter progress,
         CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var fetchDa     = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-
         var run = new ApiJobFetchRun
         {
             Id               = request.JobId,
@@ -58,85 +65,115 @@ public class WorkdayJobsJobHandler : IJobHandler
             StartedAt        = DateTime.UtcNow,
             CreatedById      = request.UserId
         };
-        await fetchDa.CreateFetchRunAsync(run);
 
+        HashSet<string> sponsors;
+        List<ApiWorkdayBoardToken> tokens;
+        using (var setupScope = _scopeFactory.CreateScope())
+        {
+            var setupDa = setupScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await setupDa.CreateFetchRunAsync(run);
+
+            sponsors = await LoadSponsorsAsync(setupDa, cancellationToken);
+            _logger.LogInformation("[Workday] Loaded {Count} H1B sponsors for matching", sponsors.Count);
+
+            tokens = await setupDa.GetActiveWorkdayTokensAsync(cancellationToken);
+            _logger.LogInformation("[Workday] Loaded {Count} board tokens", tokens.Count);
+        }
+
+        // Counters shared across parallel workers — mutate only via Interlocked.
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0, totalErrors = 0, sitesProcessed = 0;
+
+        // UpdateFetchRunStatsAsync/ReportProgressAsync wrap scoped DbContexts — serialize them.
+        using var progressLock = new SemaphoreSlim(1, 1);
 
         try
         {
-            var sponsors = await LoadSponsorsAsync(fetchDa, cancellationToken);
-            _logger.LogInformation("[Workday] Loaded {Count} H1B sponsors for matching", sponsors.Count);
-
-            var tokens = await fetchDa.GetActiveWorkdayTokensAsync(cancellationToken);
-            _logger.LogInformation("[Workday] Loaded {Count} board tokens", tokens.Count);
-
             var client = _http.CreateClient("Workday");
 
-            for (int i = 0; i < tokens.Count; i++)
+            var parallelOpts = new ParallelOptions
             {
-                if (cancellationToken.IsCancellationRequested) break;
+                MaxDegreeOfParallelism = _siteParallel,
+                CancellationToken      = cancellationToken
+            };
 
-                var token = tokens[i];
+            _logger.LogInformation("[Workday] Processing {Total} sites (siteParallel={S})", tokens.Count, _siteParallel);
+
+            await Parallel.ForEachAsync(tokens, parallelOpts, async (token, ct) =>
+            {
                 bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
-                _logger.LogInformation(
-                    "[Workday] [{I}/{Total}] {Company}/{Site} H1B={H1B}",
-                    i + 1, tokens.Count, token.CompanySlug, token.SiteId, isH1B);
+                // Each parallel worker gets its own DbContext — EF Core is not thread-safe
+                using var itemScope = _scopeFactory.CreateScope();
+                var fetchDa = itemScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
                 try
                 {
                     var (jobs, httpCode, tokenStatus, jobCount) =
-                        await FetchSiteJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+                        await FetchSiteJobsAsync(client, token, run.Id, isH1B, ct);
 
                     // null tokenStatus = transient error (5xx, 429) — leave status unchanged so it retries next run
                     if (tokenStatus != null)
-                        await fetchDa.UpdateWorkdayTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+                        await fetchDa.UpdateWorkdayTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, ct);
 
                     if (jobs.Count > 0)
                     {
-                        totalFetched += jobs.Count;
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
-                        totalInserted += ins;
-                        totalUpdated  += upd;
-                        totalErrors   += err;
+                        Interlocked.Add(ref totalFetched, jobs.Count);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        Interlocked.Add(ref totalInserted, ins);
+                        Interlocked.Add(ref totalUpdated,  upd);
+                        Interlocked.Add(ref totalErrors,   err);
                     }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     // Transient error (timeout, DNS, network) — don't touch status, will retry next run
-                    totalErrors++;
+                    Interlocked.Increment(ref totalErrors);
                     _logger.LogWarning(ex, "[Workday] Transient error {Company}/{Site} — status unchanged", token.CompanySlug, token.SiteId);
                 }
 
-                sitesProcessed++;
+                int done = Interlocked.Increment(ref sitesProcessed);
 
-                if (sitesProcessed % 20 == 0 || i == tokens.Count - 1)
+                if (done % 20 == 0 || done == tokens.Count)
                 {
-                    await fetchDa.UpdateFetchRunStatsAsync(
-                        run.Id, totalFetched, totalInserted, totalUpdated, 0, totalErrors, sitesProcessed);
+                    int fetched  = Volatile.Read(ref totalFetched);
+                    int inserted = Volatile.Read(ref totalInserted);
+                    int updated  = Volatile.Read(ref totalUpdated);
+                    int errors   = Volatile.Read(ref totalErrors);
+                    int pct      = (int)((double)done / tokens.Count * 90);
 
-                    int pct = (int)((double)(i + 1) / tokens.Count * 90);
-                    await progress.ReportProgressAsync(pct,
-                        $"Sites: {sitesProcessed}/{tokens.Count} — Inserted: {totalInserted}, Updated: {totalUpdated}");
+                    await progressLock.WaitAsync(ct);
+                    try
+                    {
+                        using var statsScope = _scopeFactory.CreateScope();
+                        var statsDa = statsScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                        await statsDa.UpdateFetchRunStatsAsync(run.Id, fetched, inserted, updated, 0, errors, done);
+                        await progress.ReportProgressAsync(pct,
+                            $"Sites: {done}/{tokens.Count} — Inserted: {inserted}, Updated: {updated}");
+                    }
+                    finally { progressLock.Release(); }
                 }
+            });
 
-                // Workday is strict about rate limiting — 400ms between sites
-                if (i < tokens.Count - 1)
-                    await Task.Delay(400, cancellationToken);
+            using (var doneScope = _scopeFactory.CreateScope())
+            {
+                var doneDa = doneScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                await doneDa.CompleteFetchRunAsync(run.Id, "Completed");
             }
-
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
         }
         catch (OperationCanceledException)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
             throw;
         }
         catch (Exception ex)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
             throw;
         }
 

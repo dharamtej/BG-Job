@@ -1,6 +1,7 @@
 // DataAccess/PostgreSQL/JobFetchDAPostgres.cs
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.DataAccess.Models;
 using CareerPanda.Framework;
 using CareerPanda.Framework.Util;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,125 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         _db     = db;
         _logger = logger;
+    }
+
+    // ── Dashboard stats ───────────────────────────────────────────────────────
+
+    public async Task<JobStatsOverview> GetStatsOverviewAsync(
+        int newCompanyWindowHours, CancellationToken cancellationToken = default)
+    {
+        if (newCompanyWindowHours <= 0) newCompanyWindowHours = 24;
+
+        // One grouped pass over raw_jobs gives per-source job + classification counts.
+        var perSource = await GetSourceAggregatesAsync(cancellationToken);
+
+        var since = DateTime.UtcNow.AddHours(-newCompanyWindowHours);
+        var totalCompanies = await _db.Companies.AsNoTracking().CountAsync(cancellationToken);
+        var newCompanies   = await _db.Companies.AsNoTracking()
+            .CountAsync(c => c.CreatedOn >= since, cancellationToken);
+
+        var overview = new JobStatsOverview
+        {
+            TotalCompanies        = totalCompanies,
+            NewCompaniesInWindow  = newCompanies,
+            NewCompanyWindowHours = newCompanyWindowHours,
+            DistinctSources       = perSource.Count,
+            JobsBySource          = perSource.ToDictionary(s => s.Source, s => s.TotalJobs)
+        };
+
+        // Roll the per-source rows up into the totals.
+        foreach (var s in perSource)
+        {
+            overview.TotalJobs  += s.TotalJobs;
+            overview.ActiveJobs += s.ActiveJobs;
+            var c = overview.Classifications;
+            c.H1BSponsored  += s.Classifications.H1BSponsored;
+            c.Sponsored     += s.Classifications.Sponsored;
+            c.W2            += s.Classifications.W2;
+            c.C2C           += s.Classifications.C2C;
+            c.ContractJob   += s.Classifications.ContractJob;
+            c.FreelanceJob  += s.Classifications.FreelanceJob;
+            c.PrimeVendor   += s.Classifications.PrimeVendor;
+            c.Staffing      += s.Classifications.Staffing;
+            c.StartupJob    += s.Classifications.StartupJob;
+            c.NonProfitJob  += s.Classifications.NonProfitJob;
+            c.UniversityJob += s.Classifications.UniversityJob;
+        }
+
+        return overview;
+    }
+
+    public async Task<List<HandlerStats>> GetStatsByHandlerAsync(CancellationToken cancellationToken = default)
+    {
+        var perSource = await GetSourceAggregatesAsync(cancellationToken);
+
+        // Latest fetch run per category (correlated subquery on max started_at).
+        var latestRuns = await _db.JobFetchRuns.AsNoTracking()
+            .Where(r => r.StartedAt == _db.JobFetchRuns
+                .Where(x => x.JobCategory == r.JobCategory)
+                .Max(x => x.StartedAt))
+            .ToListAsync(cancellationToken);
+
+        // Map a run's category/api-source to the raw_jobs.source value so we can attach it.
+        foreach (var run in latestRuns)
+        {
+            var match = perSource.FirstOrDefault(s =>
+                string.Equals(s.Source, run.ApiSource, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(s.Source, run.JobCategory?.Replace("Jobs", ""), StringComparison.OrdinalIgnoreCase));
+
+            var summary = new LatestRunSummary
+            {
+                RunId           = run.Id,
+                Status          = run.Status,
+                StartedAt       = run.StartedAt,
+                CompletedAt     = run.CompletedAt,
+                DurationSeconds = run.DurationSeconds,
+                TotalFetched    = run.TotalFetched,
+                TotalInserted   = run.TotalInserted,
+                TotalUpdated    = run.TotalUpdated,
+                TotalSkipped    = run.TotalSkipped,
+                TotalErrors     = run.TotalErrors,
+                UnitsProcessed  = run.PagesFetched,
+                ErrorMessage    = run.ErrorMessage
+            };
+
+            if (match != null)
+                match.LatestRun = summary;
+            else
+                // Run exists but no jobs yet under that source — surface it anyway.
+                perSource.Add(new HandlerStats { Source = run.ApiSource ?? run.JobCategory ?? "Unknown", LatestRun = summary });
+        }
+
+        return perSource.OrderByDescending(s => s.TotalJobs).ToList();
+    }
+
+    // Single grouped query over raw_jobs → job counts + classification breakdown per source.
+    private async Task<List<HandlerStats>> GetSourceAggregatesAsync(CancellationToken cancellationToken)
+    {
+        return await _db.RawJobs.AsNoTracking()
+            .GroupBy(j => j.Source)
+            .Select(g => new HandlerStats
+            {
+                Source            = g.Key ?? "Unknown",
+                TotalJobs         = g.Count(),
+                ActiveJobs        = g.Sum(x => x.Status == true ? 1 : 0),
+                DistinctCompanies = g.Select(x => x.OurCompanyId).Distinct().Count(),
+                Classifications   = new ClassificationCounts
+                {
+                    H1BSponsored  = g.Sum(x => x.IsH1BSponsored == true ? 1 : 0),
+                    Sponsored     = g.Sum(x => x.IsSponsored    == true ? 1 : 0),
+                    W2            = g.Sum(x => x.IsW2            == true ? 1 : 0),
+                    C2C           = g.Sum(x => x.IsC2C           == true ? 1 : 0),
+                    ContractJob   = g.Sum(x => x.IsContractJob  == true ? 1 : 0),
+                    FreelanceJob  = g.Sum(x => x.IsFreelanceJob == true ? 1 : 0),
+                    PrimeVendor   = g.Sum(x => x.IsPrimeVendor  == true ? 1 : 0),
+                    Staffing      = g.Sum(x => x.IsStaffing     == true ? 1 : 0),
+                    StartupJob    = g.Sum(x => x.IsStartupJob   == true ? 1 : 0),
+                    NonProfitJob  = g.Sum(x => x.IsNonProfitJob == true ? 1 : 0),
+                    UniversityJob = g.Sum(x => x.IsUniversityJob == true ? 1 : 0),
+                }
+            })
+            .ToListAsync(cancellationToken);
     }
 
     // ── Fetch Run ────────────────────────────────────────────────────────────

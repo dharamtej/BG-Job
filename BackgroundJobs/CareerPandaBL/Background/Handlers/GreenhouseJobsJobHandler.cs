@@ -4,12 +4,14 @@
 //          → GET /v1/boards/{token}/jobs        (job list with IDs)
 //          → GET /v1/boards/{token}/jobs/{id}?content=true  (full details)
 //          → Upsert into api.raw_jobs + api.companies
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
 using CareerPanda.Framework.Cache;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -24,16 +26,27 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
     private readonly ICacheService _cache;
     private readonly ILogger<GreenhouseJobsJobHandler> _logger;
 
+    // Bounded parallelism — tunable via appsettings without redeploy.
+    // CompanyParallel: how many boards are processed concurrently.
+    // JobDetailParallel: how many job-detail calls run concurrently within one board.
+    private readonly int _companyParallel;
+    private readonly int _jobDetailParallel;
+
     public GreenhouseJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         ICacheService cacheService,
+        IConfiguration configuration,
         ILogger<GreenhouseJobsJobHandler> logger)
     {
         _scopeFactory = scopeFactory;
         _http         = httpClientFactory;
         _cache        = cacheService;
         _logger       = logger;
+
+        var gh = configuration.GetSection("JobApiSettings");
+        _companyParallel   = Math.Max(1, gh.GetValue("GreenhouseCompanyParallel",   12));
+        _jobDetailParallel = Math.Max(1, gh.GetValue("GreenhouseJobDetailParallel",  6));
     }
 
     public async Task ExecuteAsync(
@@ -41,10 +54,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         IJobProgressReporter progress,
         CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var fetchDa     = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-
-        // Create fetch-run row
+        // Create fetch-run row + load reference data on a short-lived outer scope.
         var run = new ApiJobFetchRun
         {
             Id               = request.JobId,
@@ -55,90 +65,123 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             StartedAt        = DateTime.UtcNow,
             CreatedById      = request.UserId
         };
-        await fetchDa.CreateFetchRunAsync(run);
 
+        HashSet<string> sponsors;
+        List<ApiGreenhouseBoardToken> tokens;
+        using (var setupScope = _scopeFactory.CreateScope())
+        {
+            var setupDa = setupScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await setupDa.CreateFetchRunAsync(run);
+
+            // Load H1B sponsor set from Redis cache (same source as all other handlers)
+            sponsors = await LoadSponsorsAsync(setupDa, cancellationToken);
+            _logger.LogInformation("[Greenhouse] Loaded {Count} H1B sponsors for matching", sponsors.Count);
+
+            tokens = await setupDa.GetValidGreenhouseTokensAsync(cancellationToken);
+            _logger.LogInformation("[Greenhouse] Loaded {Count} board tokens", tokens.Count);
+        }
+
+        // Counters shared across parallel workers — mutate only via Interlocked.
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0, totalErrors = 0, companiesProcessed = 0;
+
+        // UpdateFetchRunStatsAsync/ReportProgressAsync wrap scoped DbContexts — serialize them.
+        using var progressLock = new SemaphoreSlim(1, 1);
 
         try
         {
-            // Load H1B sponsor set from Redis cache (same source as all other handlers)
-            var sponsors = await LoadSponsorsAsync(fetchDa, cancellationToken);
-            _logger.LogInformation("[Greenhouse] Loaded {Count} H1B sponsors for matching", sponsors.Count);
-
-            var tokens = await fetchDa.GetValidGreenhouseTokensAsync(cancellationToken);
-            _logger.LogInformation("[Greenhouse] Loaded {Count} board tokens", tokens.Count);
-
             var client = _http.CreateClient();
             client.DefaultRequestHeaders.Add("User-Agent", "CareerPanda/1.0 jobs-aggregator");
 
-            for (int i = 0; i < tokens.Count; i++)
+            var parallelOpts = new ParallelOptions
             {
-                if (cancellationToken.IsCancellationRequested) break;
+                MaxDegreeOfParallelism = _companyParallel,
+                CancellationToken      = cancellationToken
+            };
 
-                var token = tokens[i];
+            _logger.LogInformation(
+                "[Greenhouse] Processing {Total} boards (companyParallel={C}, jobDetailParallel={J})",
+                tokens.Count, _companyParallel, _jobDetailParallel);
 
+            await Parallel.ForEachAsync(tokens, parallelOpts, async (token, ct) =>
+            {
                 // Resolve H1B flag once per company — all jobs from this board share the same employer
                 bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
-                _logger.LogInformation(
-                    "[Greenhouse] [{I}/{Total}] Processing {Company} ({Token}) H1B={H1B}",
-                    i + 1, tokens.Count, token.CompanyName, token.BoardToken, isH1B);
+                // Each parallel worker gets its own DbContext — EF Core is not thread-safe
+                using var itemScope = _scopeFactory.CreateScope();
+                var fetchDa = itemScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
                 try
                 {
                     var (jobs, httpCode, tokenStatus, jobCount) =
-                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, ct);
 
                     // null = transient error — leave status unchanged so it retries next run
                     if (tokenStatus != null)
-                        await fetchDa.UpdateGreenhouseTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+                        await fetchDa.UpdateGreenhouseTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, ct);
 
                     if (jobs.Count > 0)
                     {
-                        totalFetched += jobs.Count;
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
-                        totalInserted += ins;
-                        totalUpdated  += upd;
-                        totalErrors   += err;
+                        Interlocked.Add(ref totalFetched, jobs.Count);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        Interlocked.Add(ref totalInserted, ins);
+                        Interlocked.Add(ref totalUpdated,  upd);
+                        Interlocked.Add(ref totalErrors,   err);
                     }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     // Transient error (timeout, DNS) — don't touch status, will retry next run
-                    totalErrors++;
+                    Interlocked.Increment(ref totalErrors);
                     _logger.LogWarning(ex, "[Greenhouse] Transient error {Company} — status unchanged", token.CompanyName);
                 }
 
-                companiesProcessed++;
+                int done = Interlocked.Increment(ref companiesProcessed);
 
-                // Update stats and progress every 10 companies
-                if (companiesProcessed % 10 == 0 || i == tokens.Count - 1)
+                // Persist stats + report progress every 10 companies (and on the last one)
+                if (done % 10 == 0 || done == tokens.Count)
                 {
-                    await fetchDa.UpdateFetchRunStatsAsync(
-                        run.Id, totalFetched, totalInserted, totalUpdated, 0, totalErrors, companiesProcessed);
+                    int fetched  = Volatile.Read(ref totalFetched);
+                    int inserted = Volatile.Read(ref totalInserted);
+                    int updated  = Volatile.Read(ref totalUpdated);
+                    int errors   = Volatile.Read(ref totalErrors);
+                    int pct      = (int)((double)done / tokens.Count * 90);
 
-                    int pct = (int)((double)(i + 1) / tokens.Count * 90);
-                    await progress.ReportProgressAsync(pct,
-                        $"Companies: {companiesProcessed}/{tokens.Count} — Inserted: {totalInserted}, Updated: {totalUpdated}");
+                    await progressLock.WaitAsync(ct);
+                    try
+                    {
+                        using var statsScope = _scopeFactory.CreateScope();
+                        var statsDa = statsScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                        await statsDa.UpdateFetchRunStatsAsync(
+                            run.Id, fetched, inserted, updated, 0, errors, done);
+
+                        await progress.ReportProgressAsync(pct,
+                            $"Companies: {done}/{tokens.Count} — Inserted: {inserted}, Updated: {updated}");
+                    }
+                    finally { progressLock.Release(); }
                 }
+            });
 
-                // Small delay between companies to be a polite API consumer
-                if (i < tokens.Count - 1)
-                    await Task.Delay(300, cancellationToken);
+            using (var doneScope = _scopeFactory.CreateScope())
+            {
+                var doneDa = doneScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                await doneDa.CompleteFetchRunAsync(run.Id, "Completed");
             }
-
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
         }
         catch (OperationCanceledException)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
             throw;
         }
         catch (Exception ex)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
             throw;
         }
 
@@ -207,32 +250,36 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
 
         _logger.LogInformation("[Greenhouse] {Company}: {Count} jobs to fetch", token.CompanyName, jobIds.Count);
 
-        // Step 2: fetch full detail for each job
-        var results = new List<ApiRawJob>(jobIds.Count);
-        foreach (var jobId in jobIds)
+        // Step 2: fetch full detail for each job — bounded concurrency, no artificial delay
+        var results = new ConcurrentBag<ApiRawJob>();
+        var detailOpts = new ParallelOptions
         {
-            if (ct.IsCancellationRequested) break;
+            MaxDegreeOfParallelism = _jobDetailParallel,
+            CancellationToken      = ct
+        };
+
+        await Parallel.ForEachAsync(jobIds, detailOpts, async (jobId, innerCt) =>
+        {
             try
             {
                 var detailUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}/jobs/{jobId}?content=true";
-                using var detailResp = await client.GetAsync(detailUrl, ct);
+                using var detailResp = await client.GetAsync(detailUrl, innerCt);
 
-                if (!detailResp.IsSuccessStatusCode) continue;
+                if (!detailResp.IsSuccessStatusCode) return;
 
-                var detail = await detailResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+                var detail = await detailResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: innerCt);
                 var mapped = MapJob(detail, token, fetchRunId, isH1B);
                 if (mapped != null) results.Add(mapped);
-
-                await Task.Delay(50, ct);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) when (innerCt.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[Greenhouse] Failed fetching job {JobId} for {Token}", jobId, token.BoardToken);
             }
-        }
+        });
 
-        return (results, httpCode, results.Count > 0 ? "VALID" : "EMPTY", jobIds.Count);
+        var list = results.ToList();
+        return (list, httpCode, list.Count > 0 ? "VALID" : "EMPTY", jobIds.Count);
     }
 
     // ── Field mapping ─────────────────────────────────────────────────────────

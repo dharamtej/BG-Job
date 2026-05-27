@@ -10,6 +10,7 @@ using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
 using CareerPanda.Framework.Cache;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -24,16 +25,23 @@ public class LeverJobsJobHandler : IJobHandler
     private readonly ICacheService _cache;
     private readonly ILogger<LeverJobsJobHandler> _logger;
 
+    // How many boards are processed concurrently — tunable via appsettings.
+    private readonly int _companyParallel;
+
     public LeverJobsJobHandler(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         ICacheService cacheService,
+        IConfiguration configuration,
         ILogger<LeverJobsJobHandler> logger)
     {
         _scopeFactory = scopeFactory;
         _http         = httpClientFactory;
         _cache        = cacheService;
         _logger       = logger;
+
+        _companyParallel = Math.Max(1,
+            configuration.GetSection("JobApiSettings").GetValue("LeverCompanyParallel", 12));
     }
 
     public async Task ExecuteAsync(
@@ -41,9 +49,6 @@ public class LeverJobsJobHandler : IJobHandler
         IJobProgressReporter progress,
         CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var fetchDa     = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-
         var run = new ApiJobFetchRun
         {
             Id               = request.JobId,
@@ -54,84 +59,115 @@ public class LeverJobsJobHandler : IJobHandler
             StartedAt        = DateTime.UtcNow,
             CreatedById      = request.UserId
         };
-        await fetchDa.CreateFetchRunAsync(run);
 
+        HashSet<string> sponsors;
+        List<ApiLeverBoardToken> tokens;
+        using (var setupScope = _scopeFactory.CreateScope())
+        {
+            var setupDa = setupScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await setupDa.CreateFetchRunAsync(run);
+
+            sponsors = await LoadSponsorsAsync(setupDa, cancellationToken);
+            _logger.LogInformation("[Lever] Loaded {Count} H1B sponsors for matching", sponsors.Count);
+
+            tokens = await setupDa.GetActiveLeverTokensAsync(cancellationToken);
+            _logger.LogInformation("[Lever] Loaded {Count} board tokens", tokens.Count);
+        }
+
+        // Counters shared across parallel workers — mutate only via Interlocked.
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0, totalErrors = 0, companiesProcessed = 0;
+
+        // UpdateFetchRunStatsAsync/ReportProgressAsync wrap scoped DbContexts — serialize them.
+        using var progressLock = new SemaphoreSlim(1, 1);
 
         try
         {
-            var sponsors = await LoadSponsorsAsync(fetchDa, cancellationToken);
-            _logger.LogInformation("[Lever] Loaded {Count} H1B sponsors for matching", sponsors.Count);
-
-            var tokens = await fetchDa.GetActiveLeverTokensAsync(cancellationToken);
-            _logger.LogInformation("[Lever] Loaded {Count} board tokens", tokens.Count);
-
             var client = _http.CreateClient("Lever");
 
-            for (int i = 0; i < tokens.Count; i++)
+            var parallelOpts = new ParallelOptions
             {
-                if (cancellationToken.IsCancellationRequested) break;
+                MaxDegreeOfParallelism = _companyParallel,
+                CancellationToken      = cancellationToken
+            };
 
-                var token = tokens[i];
+            _logger.LogInformation("[Lever] Processing {Total} boards (companyParallel={C})", tokens.Count, _companyParallel);
+
+            await Parallel.ForEachAsync(tokens, parallelOpts, async (token, ct) =>
+            {
                 bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
-                _logger.LogInformation(
-                    "[Lever] [{I}/{Total}] Processing {Company} ({Token}) H1B={H1B}",
-                    i + 1, tokens.Count, token.CompanyName, token.BoardToken, isH1B);
+                // Each parallel worker gets its own DbContext — EF Core is not thread-safe
+                using var itemScope = _scopeFactory.CreateScope();
+                var fetchDa = itemScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
                 try
                 {
                     var (jobs, httpCode, tokenStatus, jobCount) =
-                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, cancellationToken);
+                        await FetchCompanyJobsAsync(client, token, run.Id, isH1B, ct);
 
                     // null = transient error — leave status unchanged so it retries next run
                     if (tokenStatus != null)
-                        await fetchDa.UpdateLeverTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, cancellationToken);
+                        await fetchDa.UpdateLeverTokenStatusAsync(token.Id, tokenStatus, httpCode, jobCount, ct);
 
                     if (jobs.Count > 0)
                     {
-                        totalFetched += jobs.Count;
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
-                        totalInserted += ins;
-                        totalUpdated  += upd;
-                        totalErrors   += err;
+                        Interlocked.Add(ref totalFetched, jobs.Count);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        Interlocked.Add(ref totalInserted, ins);
+                        Interlocked.Add(ref totalUpdated,  upd);
+                        Interlocked.Add(ref totalErrors,   err);
                     }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     // Transient error (timeout, DNS, network) — don't touch status, will retry next run
-                    totalErrors++;
+                    Interlocked.Increment(ref totalErrors);
                     _logger.LogWarning(ex, "[Lever] Transient error {Company} — status unchanged", token.CompanyName);
                 }
 
-                companiesProcessed++;
+                int done = Interlocked.Increment(ref companiesProcessed);
 
-                if (companiesProcessed % 10 == 0 || i == tokens.Count - 1)
+                if (done % 10 == 0 || done == tokens.Count)
                 {
-                    await fetchDa.UpdateFetchRunStatsAsync(
-                        run.Id, totalFetched, totalInserted, totalUpdated, 0, totalErrors, companiesProcessed);
+                    int fetched  = Volatile.Read(ref totalFetched);
+                    int inserted = Volatile.Read(ref totalInserted);
+                    int updated  = Volatile.Read(ref totalUpdated);
+                    int errors   = Volatile.Read(ref totalErrors);
+                    int pct      = (int)((double)done / tokens.Count * 90);
 
-                    int pct = (int)((double)(i + 1) / tokens.Count * 90);
-                    await progress.ReportProgressAsync(pct,
-                        $"Companies: {companiesProcessed}/{tokens.Count} — Inserted: {totalInserted}, Updated: {totalUpdated}");
+                    await progressLock.WaitAsync(ct);
+                    try
+                    {
+                        using var statsScope = _scopeFactory.CreateScope();
+                        var statsDa = statsScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                        await statsDa.UpdateFetchRunStatsAsync(run.Id, fetched, inserted, updated, 0, errors, done);
+                        await progress.ReportProgressAsync(pct,
+                            $"Companies: {done}/{tokens.Count} — Inserted: {inserted}, Updated: {updated}");
+                    }
+                    finally { progressLock.Release(); }
                 }
+            });
 
-                if (i < tokens.Count - 1)
-                    await Task.Delay(200, cancellationToken);
+            using (var doneScope = _scopeFactory.CreateScope())
+            {
+                var doneDa = doneScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                await doneDa.CompleteFetchRunAsync(run.Id, "Completed");
             }
-
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Completed");
         }
         catch (OperationCanceledException)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
             throw;
         }
         catch (Exception ex)
         {
-            await fetchDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
             throw;
         }
 

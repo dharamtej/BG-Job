@@ -1,11 +1,19 @@
 // DataAccess/DA/IJobFetchDA.cs
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.DataAccess.Models;
 using CareerPanda.Framework;
 
 namespace CareerPanda.DataAccess.DA;
 
 public interface IJobFetchDA
 {
+    // ── Dashboard stats ───────────────────────────────────────────────────────
+    /// <summary>Top-level counts: totals, classification breakdown, jobs-by-source.</summary>
+    Task<JobStatsOverview> GetStatsOverviewAsync(int newCompanyWindowHours, CancellationToken cancellationToken = default);
+
+    /// <summary>Per-handler (source) roll-up incl. classification counts and latest run.</summary>
+    Task<List<HandlerStats>> GetStatsByHandlerAsync(CancellationToken cancellationToken = default);
+
     // ── Fetch Run ───────────────────────────────────────────────────────────
     Task<FrameworkResponse> CreateFetchRunAsync(ApiJobFetchRun run);
 
