@@ -1,0 +1,90 @@
+// CareerPandaBL/Background/Handlers/JobValidationGate.cs
+// Centralized "should this row be stored?" gate.
+// A handler's MapJob should return null when this gate rejects the row.
+//
+// Rules (drop the row if ANY is violated):
+//   - Source, SourceId, JobTitle, JobLink, CompanyName must all be non-empty
+//   - Country must resolve to US (or recognized US state)
+//   - WorkType must be one of {OnSite, Remote, Hybrid}
+//   - ContractType must be one of {FullTime, PartTime, Contract, Temporary, Internship}
+//   - PostDate must be non-null
+//
+// Handlers that don't natively populate ContractType (e.g. Ashby/Lever/Greenhouse)
+// can call DeriveContractType(isContract, isInternship) before invoking the gate.
+using CareerPanda.DataAccess.Entities.Api;
+using Microsoft.Extensions.Logging;
+
+namespace CareerPanda.BL.Background.Handlers;
+
+internal static class JobValidationGate
+{
+    private static readonly HashSet<string> ValidWorkTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "OnSite", "Remote", "Hybrid" };
+
+    private static readonly HashSet<string> ValidContractTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "FullTime", "PartTime", "Contract", "Temporary", "Internship" };
+
+    // Returns true if the job should be stored; false (with reason) otherwise.
+    public static bool TryAccept(ApiRawJob job, out string? rejectReason)
+    {
+        if (string.IsNullOrWhiteSpace(job.Source))       { rejectReason = "Source missing";       return false; }
+        if (string.IsNullOrWhiteSpace(job.SourceId))     { rejectReason = "SourceId missing";     return false; }
+        if (string.IsNullOrWhiteSpace(job.JobTitle))     { rejectReason = "JobTitle missing";     return false; }
+        if (string.IsNullOrWhiteSpace(job.JobLink))      { rejectReason = "JobLink missing";      return false; }
+        if (string.IsNullOrWhiteSpace(job.CompanyName))  { rejectReason = "CompanyName missing";  return false; }
+
+        // Country must resolve to US — either explicit "US" or recognized US state/country variant
+        if (!UsLocationHelper.IsUs(job.Country, job.State)
+            && !string.Equals(job.Country, "US", StringComparison.OrdinalIgnoreCase))
+        {
+            rejectReason = $"Country not US (country='{job.Country}', state='{job.State}')";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(job.WorkType) || !ValidWorkTypes.Contains(job.WorkType))
+        {
+            rejectReason = $"WorkType invalid: '{job.WorkType}'";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(job.ContractType) || !ValidContractTypes.Contains(job.ContractType))
+        {
+            rejectReason = $"ContractType invalid: '{job.ContractType}'";
+            return false;
+        }
+
+        if (job.PostDate is null)
+        {
+            rejectReason = "PostDate missing";
+            return false;
+        }
+
+        rejectReason = null;
+        return true;
+    }
+
+    // Convenience: returns the job if accepted, null if rejected.
+    // Handlers can write: return JobValidationGate.AcceptOrNull(job, logger, "[Recruitee]");
+    public static ApiRawJob? AcceptOrNull(
+        ApiRawJob job,
+        ILogger? logger = null,
+        string? handlerTag = null)
+    {
+        if (TryAccept(job, out var reason)) return job;
+
+        logger?.LogDebug(
+            "{Tag} dropped job {Company}/{Title}: {Reason}",
+            handlerTag ?? "[Validation]", job.CompanyName, job.JobTitle, reason);
+        return null;
+    }
+
+    // Derive ContractType from boolean flags when the source API doesn't expose it directly.
+    // Order matters: Internship beats Contract beats default FullTime.
+    public static string DeriveContractType(bool isContract, bool isInternship, bool isPartTime = false)
+    {
+        if (isInternship) return "Internship";
+        if (isContract)   return "Contract";
+        if (isPartTime)   return "PartTime";
+        return "FullTime";
+    }
+}

@@ -275,6 +275,18 @@ public class JobController : CoreController
             JobType     = "AshbyJobs",
             Description = """{}"""
         },
+        "BambooHrJobs" => new
+        {
+            Name        = "Fetch BambooHR Jobs — All Board Tokens",
+            JobType     = "BambooHrJobs",
+            Description = """{}"""
+        },
+        "IcimsJobs" => new
+        {
+            Name        = "Fetch iCIMS Jobs — All Board Tokens",
+            JobType     = "IcimsJobs",
+            Description = """{}"""
+        },
         _ => new
         {
             Name        = jobType,

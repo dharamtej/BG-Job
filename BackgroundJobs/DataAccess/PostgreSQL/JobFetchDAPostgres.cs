@@ -5,6 +5,7 @@ using CareerPanda.Framework;
 using CareerPanda.Framework.Util;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace CareerPanda.DataAccess.PostgreSQL;
 
@@ -295,6 +296,7 @@ public class JobFetchDAPostgres : IJobFetchDA
             if (cancellationToken.IsCancellationRequested) break;
 
             var groupJobs = group.ToList();
+            int batchInserted = 0, batchUpdated = 0;
             try
             {
                 // 1. Resolve company once for the whole group
@@ -347,13 +349,13 @@ public class JobFetchDAPostgres : IJobFetchDA
                         job.CreatedOn = DateTime.UtcNow;
                         job.UpdatedOn = DateTime.UtcNow;
                         toAdd.Add(job);
-                        inserted++;
+                        batchInserted++;
                     }
                     else
                     {
                         MapUpdatableFields(existing, job);
                         existing.UpdatedOn = DateTime.UtcNow;
-                        updated++;
+                        batchUpdated++;
                     }
                 }
 
@@ -363,6 +365,10 @@ public class JobFetchDAPostgres : IJobFetchDA
                 // 4. Single SaveChanges for the whole company batch
                 await _db.SaveChangesAsync(cancellationToken);
 
+                // Only commit the batch counts to the totals AFTER a successful save.
+                inserted += batchInserted;
+                updated  += batchUpdated;
+
                 // 5. Detach so the change-tracker doesn't bloat for the next batch
                 foreach (var j in toAdd) _db.Entry(j).State = EntityState.Detached;
                 foreach (var j in existingBySourceId.Values) _db.Entry(j).State = EntityState.Detached;
@@ -371,17 +377,28 @@ public class JobFetchDAPostgres : IJobFetchDA
             }
             catch (Exception ex)
             {
+                // Reset the context BEFORE any rethrow so the next batch starts clean
+                foreach (var entry in _db.ChangeTracker.Entries().ToList())
+                    entry.State = EntityState.Detached;
+
+                // Detect fatal DB conditions — abort the entire run instead of continuing
+                var pg = FindPostgresException(ex);
+                if (pg != null && IsFatalSqlState(pg.SqlState))
+                {
+                    _logger.LogCritical(
+                        "==> FATAL DB error ({SqlState}) — aborting run | Source={Source} Company={Company} | {Message}",
+                        pg.SqlState, groupJobs[0].Source, groupJobs[0].CompanyName, pg.Message);
+                    throw new FatalDatabaseException(
+                        $"Fatal Postgres error {pg.SqlState}: {pg.Message}", pg.SqlState, ex);
+                }
+
+                // Batch never committed — only the error count goes up.
+                // batchInserted/batchUpdated were locals, so they're discarded automatically.
                 errors += groupJobs.Count;
-                // Adjust counters: this batch didn't actually commit
-                inserted -= groupJobs.Count(j => j.Id == 0);
                 var inner = ex.InnerException?.Message ?? ex.Message;
                 _logger.LogError(
                     "==> BulkUpsert batch FAILED | Source={Source} Company={Company} Count={Count} | Error: {Error} | Inner: {Inner}",
                     groupJobs[0].Source, groupJobs[0].CompanyName, groupJobs.Count, ex.Message, inner);
-
-                // Reset the context to prevent poisoned change-tracker carrying into next batch
-                foreach (var entry in _db.ChangeTracker.Entries().ToList())
-                    entry.State = EntityState.Detached;
             }
         }
 
@@ -522,6 +539,42 @@ public class JobFetchDAPostgres : IJobFetchDA
             cancellationToken);
     }
 
+    // ── Fatal Postgres error detection ──────────────────────────────────────
+    // SQLSTATE classes that indicate the DB itself is unhealthy and further
+    // work cannot succeed. Hitting any of these aborts the run immediately.
+    private static readonly HashSet<string> FatalSqlStates = new(StringComparer.Ordinal)
+    {
+        "53100", // disk_full
+        "53200", // out_of_memory
+        "53300", // too_many_connections
+        "53400", // configuration_limit_exceeded
+        "57P01", // admin_shutdown
+        "57P02", // crash_shutdown
+        "57P03", // cannot_connect_now
+        "58000", // system_error
+        "58030", // io_error
+        "XX000"  // internal_error
+    };
+
+    private static bool IsFatalSqlState(string? sqlState)
+    {
+        if (string.IsNullOrEmpty(sqlState)) return false;
+        // Class 08 = Connection Exception — all variants are fatal
+        if (sqlState.StartsWith("08", StringComparison.Ordinal)) return true;
+        return FatalSqlStates.Contains(sqlState);
+    }
+
+    private static NpgsqlException? FindPostgresException(Exception? ex)
+    {
+        while (ex != null)
+        {
+            if (ex is PostgresException pg) return pg;
+            if (ex is NpgsqlException ne) return ne;
+            ex = ex.InnerException;
+        }
+        return null;
+    }
+
     public async Task<int> RecoverOrphanedFetchRunsAsync(CancellationToken cancellationToken = default)
     {
         return await _db.JobFetchRuns
@@ -545,6 +598,69 @@ public class JobFetchDAPostgres : IJobFetchDA
     public async Task UpdateAshbyTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
     {
         await _db.AshbyBoardTokens
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(t => t
+                .SetProperty(x => x.Status,    status)
+                .SetProperty(x => x.HttpCode,  httpCode)
+                .SetProperty(x => x.JobCount,  jobCount)
+                .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
+    public async Task<List<ApiBambooHrBoardToken>> GetActiveBambooHrTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.BambooHrBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status != "INVALID")
+            .OrderBy(t => t.CompanyName)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateBambooHrTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
+    {
+        await _db.BambooHrBoardTokens
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(t => t
+                .SetProperty(x => x.Status,    status)
+                .SetProperty(x => x.HttpCode,  httpCode)
+                .SetProperty(x => x.JobCount,  jobCount)
+                .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
+    public async Task<List<ApiIcimsBoardToken>> GetActiveIcimsTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.IcimsBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status != "INVALID")
+            .OrderBy(t => t.CompanyName)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateIcimsTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
+    {
+        await _db.IcimsBoardTokens
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(t => t
+                .SetProperty(x => x.Status,    status)
+                .SetProperty(x => x.HttpCode,  httpCode)
+                .SetProperty(x => x.JobCount,  jobCount)
+                .SetProperty(x => x.UpdatedAt, DateTime.UtcNow),
+            cancellationToken);
+    }
+
+    public async Task<List<ApiRecruiteeBoardToken>> GetActiveRecruiteeTokensAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.RecruiteeBoardTokens
+            .AsNoTracking()
+            .Where(t => t.Status != "INVALID")
+            .OrderBy(t => t.CompanyName)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateRecruiteeTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default)
+    {
+        await _db.RecruiteeBoardTokens
             .Where(t => t.Id == id)
             .ExecuteUpdateAsync(t => t
                 .SetProperty(x => x.Status,    status)

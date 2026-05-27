@@ -57,6 +57,18 @@ public interface IJobFetchDA
     Task<List<ApiAshbyBoardToken>> GetActiveAshbyTokensAsync(CancellationToken cancellationToken = default);
     Task UpdateAshbyTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
 
+    // ── BambooHR ────────────────────────────────────────────────────────────
+    Task<List<ApiBambooHrBoardToken>> GetActiveBambooHrTokensAsync(CancellationToken cancellationToken = default);
+    Task UpdateBambooHrTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
+
+    // ── iCIMS ───────────────────────────────────────────────────────────────
+    Task<List<ApiIcimsBoardToken>> GetActiveIcimsTokensAsync(CancellationToken cancellationToken = default);
+    Task UpdateIcimsTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
+
+    // ── Recruitee ───────────────────────────────────────────────────────────
+    Task<List<ApiRecruiteeBoardToken>> GetActiveRecruiteeTokensAsync(CancellationToken cancellationToken = default);
+    Task UpdateRecruiteeTokenStatusAsync(int id, string status, short httpCode, int jobCount, CancellationToken cancellationToken = default);
+
     // ── H1B Sponsors ────────────────────────────────────────────────────────
     Task<List<string>> GetH1BSponsorNamesAsync(CancellationToken cancellationToken = default);
     Task<List<ApiH1bSponsor>> GetUnenrichedSponsorsAsync(int batchSize, CancellationToken cancellationToken = default);

@@ -9,7 +9,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
 using CareerPanda.Framework.Cache;
@@ -18,7 +17,7 @@ using Microsoft.Extensions.Logging;
 
 namespace CareerPanda.BL.Background.Handlers;
 
-public partial class WorkdayJobsJobHandler : IJobHandler
+public class WorkdayJobsJobHandler : IJobHandler
 {
     public string JobType => "WorkdayJobs";
 
@@ -78,7 +77,7 @@ public partial class WorkdayJobsJobHandler : IJobHandler
                 if (cancellationToken.IsCancellationRequested) break;
 
                 var token = tokens[i];
-                bool isH1B = IsH1BSponsored(token.CompanyName, sponsors);
+                bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
                 _logger.LogInformation(
                     "[Workday] [{I}/{Total}] {Company}/{Site} H1B={H1B}",
@@ -103,6 +102,7 @@ public partial class WorkdayJobsJobHandler : IJobHandler
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     // Transient error (timeout, DNS, network) — don't touch status, will retry next run
@@ -151,38 +151,12 @@ public partial class WorkdayJobsJobHandler : IJobHandler
     {
         var cached = await _cache.GetAsync<List<string>>(SponsorCacheWarmupService.CacheKey, ct);
         if (cached is { Count: > 0 })
-            return BuildSponsorSet(cached);
+            return CompanyNameNormalizer.BuildSponsorSet(cached);
 
         var names = await fetchDa.GetH1BSponsorNamesAsync(ct);
         await _cache.SetAsync(SponsorCacheWarmupService.CacheKey, names, SponsorCacheWarmupService.CacheTtl, ct);
         _logger.LogInformation("[Workday] Reloaded {Count} H1B sponsors from DB into cache", names.Count);
-        return BuildSponsorSet(names);
-    }
-
-    private static HashSet<string> BuildSponsorSet(List<string> names)
-    {
-        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
-        return set;
-    }
-
-    private static bool IsH1BSponsored(string companyName, HashSet<string> sponsors) =>
-        sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName));
-
-    private static readonly string[] LegalSuffixes =
-        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
-
-    [GeneratedRegex(@"[^\w\s]")]
-    private static partial Regex NonWordChars();
-
-    private static string NormalizeCompanyName(string name)
-    {
-        var upper    = name.ToUpperInvariant();
-        var stripped = NonWordChars().Replace(upper, " ");
-        var parts    = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        int count    = parts.Length;
-        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
-        return string.Join(' ', parts, 0, count);
+        return CompanyNameNormalizer.BuildSponsorSet(names);
     }
 
     // ── Per-site paginated fetch ───────────────────────────────────────────────
@@ -288,7 +262,9 @@ public partial class WorkdayJobsJobHandler : IJobHandler
         ParseLocation(locText, out var city, out var state, out var country, out var workType, out var jobWorkMode);
 
         // Skip non-US jobs
-        if (!string.IsNullOrEmpty(country) && !UsCountryVariants.Contains(country))
+        // (Workday convention: an empty/null country is treated as US — ParseLocation
+        // initializes country="US" and only overwrites it for clearly-foreign strings.)
+        if (!string.IsNullOrEmpty(country) && !UsLocationHelper.CountryVariants.Contains(country))
             return null;
 
         // ── Description / H1B ────────────────────────────────────────────────
@@ -399,34 +375,7 @@ public partial class WorkdayJobsJobHandler : IJobHandler
     }
 
     // ── Location parsing ──────────────────────────────────────────────────────
-
-    private static readonly HashSet<string> UsStateAbbrs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
-        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-        "VA","WA","WV","WI","WY",
-        "DC","PR","GU","VI","AS","MP"
-    };
-
-    private static readonly HashSet<string> UsStateNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
-        "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
-        "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
-        "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada",
-        "New Hampshire","New Jersey","New Mexico","New York","North Carolina",
-        "North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
-        "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
-        "Virginia","Washington","West Virginia","Wisconsin","Wyoming",
-        "District of Columbia","Washington DC","Washington D.C.",
-        "D.C.","Puerto Rico","Guam","Virgin Islands","American Samoa"
-    };
-
-    private static readonly HashSet<string> UsCountryVariants = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "US", "USA", "U.S.", "U.S.A.", "United States", "United States of America"
-    };
+    // US-location reference data lives in UsLocationHelper (shared with all ATS handlers).
 
     private static void ParseLocation(
         string raw, out string? city, out string? state,
@@ -460,9 +409,9 @@ public partial class WorkdayJobsJobHandler : IJobHandler
         if (parts.Length == 1)
         {
             var only = parts[0].Trim();
-            if (UsCountryVariants.Contains(only))
+            if (UsLocationHelper.CountryVariants.Contains(only))
                 return;  // "United States" alone — country stays "US", no city
-            if (UsStateNames.Contains(only) || UsStateAbbrs.Contains(only))
+            if (UsLocationHelper.StateNames.Contains(only) || UsLocationHelper.StateAbbrs.Contains(only))
                 { state = only; return; }
             // anything else is likely a foreign country or city-only — mark as foreign
             // so the US filter in MapJob drops it unless it's clearly a US location
@@ -477,11 +426,11 @@ public partial class WorkdayJobsJobHandler : IJobHandler
         {
             var part2 = parts[1].Trim();
 
-            if (UsStateAbbrs.Contains(part2))
+            if (UsLocationHelper.StateAbbrs.Contains(part2))
                 state = part2;
-            else if (UsStateNames.Contains(part2))
+            else if (UsLocationHelper.StateNames.Contains(part2))
                 state = part2;
-            else if (UsCountryVariants.Contains(part2))
+            else if (UsLocationHelper.CountryVariants.Contains(part2))
                 { /* country already "US" */ }
             else if (part2.Length > 2)
                 country = part2;
@@ -490,7 +439,7 @@ public partial class WorkdayJobsJobHandler : IJobHandler
         if (parts.Length >= 3)
         {
             var part3 = parts[2].Trim();
-            country = UsCountryVariants.Contains(part3) ? "US" : part3;
+            country = UsLocationHelper.CountryVariants.Contains(part3) ? "US" : part3;
         }
     }
 }

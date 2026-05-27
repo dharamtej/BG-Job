@@ -78,7 +78,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                 var token = tokens[i];
 
                 // Resolve H1B flag once per company — all jobs from this board share the same employer
-                bool isH1B = IsH1BSponsored(token.CompanyName, sponsors);
+                bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
                 _logger.LogInformation(
                     "[Greenhouse] [{I}/{Total}] Processing {Company} ({Token}) H1B={H1B}",
@@ -103,6 +103,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     // Transient error (timeout, DNS) — don't touch status, will retry next run
@@ -152,39 +153,13 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
     {
         var cached = await _cache.GetAsync<List<string>>(SponsorCacheWarmupService.CacheKey, ct);
         if (cached is { Count: > 0 })
-            return BuildSponsorSet(cached);
+            return CompanyNameNormalizer.BuildSponsorSet(cached);
 
         // Cache miss — reload from DB and re-cache
         var names = await fetchDa.GetH1BSponsorNamesAsync(ct);
         await _cache.SetAsync(SponsorCacheWarmupService.CacheKey, names, SponsorCacheWarmupService.CacheTtl, ct);
         _logger.LogInformation("[Greenhouse] Reloaded {Count} H1B sponsors from DB into cache", names.Count);
-        return BuildSponsorSet(names);
-    }
-
-    private static HashSet<string> BuildSponsorSet(List<string> names)
-    {
-        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
-        return set;
-    }
-
-    private static bool IsH1BSponsored(string companyName, HashSet<string> sponsors) =>
-        sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName));
-
-    private static readonly string[] LegalSuffixes =
-        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
-
-    [GeneratedRegex(@"[^\w\s]")]
-    private static partial Regex NonWordChars();
-
-    private static string NormalizeCompanyName(string name)
-    {
-        var upper    = name.ToUpperInvariant();
-        var stripped = NonWordChars().Replace(upper, " ");
-        var parts    = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        int count    = parts.Length;
-        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
-        return string.Join(' ', parts, 0, count);
+        return CompanyNameNormalizer.BuildSponsorSet(names);
     }
 
     // ── Per-company fetch: list jobs → detail each job ───────────────────────

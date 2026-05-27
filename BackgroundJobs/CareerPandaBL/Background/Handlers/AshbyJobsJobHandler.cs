@@ -75,7 +75,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
                 if (cancellationToken.IsCancellationRequested) break;
 
                 var token = tokens[i];
-                bool isH1B = IsH1BSponsored(token.CompanyName, sponsors);
+                bool isH1B = CompanyNameNormalizer.IsH1BSponsored(token.CompanyName, sponsors);
 
                 _logger.LogInformation(
                     "[Ashby] [{I}/{Total}] Processing {Company} ({Token}) H1B={H1B}",
@@ -99,6 +99,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (FatalDatabaseException) { throw; }
                 catch (Exception ex)
                 {
                     totalErrors++;
@@ -145,38 +146,12 @@ public partial class AshbyJobsJobHandler : IJobHandler
     {
         var cached = await _cache.GetAsync<List<string>>(SponsorCacheWarmupService.CacheKey, ct);
         if (cached is { Count: > 0 })
-            return BuildSponsorSet(cached);
+            return CompanyNameNormalizer.BuildSponsorSet(cached);
 
         var names = await fetchDa.GetH1BSponsorNamesAsync(ct);
         await _cache.SetAsync(SponsorCacheWarmupService.CacheKey, names, SponsorCacheWarmupService.CacheTtl, ct);
         _logger.LogInformation("[Ashby] Reloaded {Count} H1B sponsors from DB into cache", names.Count);
-        return BuildSponsorSet(names);
-    }
-
-    private static HashSet<string> BuildSponsorSet(List<string> names)
-    {
-        var set = new HashSet<string>(names.Count * 2, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names) { set.Add(name); set.Add(NormalizeCompanyName(name)); }
-        return set;
-    }
-
-    private static bool IsH1BSponsored(string companyName, HashSet<string> sponsors) =>
-        sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName));
-
-    private static readonly string[] LegalSuffixes =
-        ["INCORPORATED", "CORPORATION", "LIMITED", "INC", "LLC", "CORP", "LTD", "CO", "LP", "LLP", "PLLC", "PC"];
-
-    [GeneratedRegex(@"[^\w\s]")]
-    private static partial Regex NonWordChars();
-
-    private static string NormalizeCompanyName(string name)
-    {
-        var upper    = name.ToUpperInvariant();
-        var stripped = NonWordChars().Replace(upper, " ");
-        var parts    = stripped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        int count    = parts.Length;
-        while (count > 1 && LegalSuffixes.Contains(parts[count - 1])) count--;
-        return string.Join(' ', parts, 0, count);
+        return CompanyNameNormalizer.BuildSponsorSet(names);
     }
 
     // ── Per-company fetch ─────────────────────────────────────────────────────
@@ -283,7 +258,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
                 out var cCity, out var cState, out var cCountry,
                 out var cWork, out var cMode);
 
-            if (UsCountryVariants.Contains(cCountry ?? "US") || cState != null)
+            if (UsLocationHelper.CountryVariants.Contains(cCountry ?? "US") || cState != null)
             {
                 city = cCity; state = cState; country = "US";
                 workType = cWork; jobWorkMode = cMode;
@@ -477,34 +452,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
     }
 
     // ── Location parsing ──────────────────────────────────────────────────────
-
-    private static readonly HashSet<string> UsStateAbbrs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
-        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-        "VA","WA","WV","WI","WY",
-        "DC","PR","GU","VI","AS","MP"
-    };
-
-    private static readonly HashSet<string> UsStateNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
-        "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
-        "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
-        "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada",
-        "New Hampshire","New Jersey","New Mexico","New York","North Carolina",
-        "North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
-        "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
-        "Virginia","Washington","West Virginia","Wisconsin","Wyoming",
-        "District of Columbia","Washington DC","Washington D.C.",
-        "D.C.","Puerto Rico","Guam","Virgin Islands","American Samoa"
-    };
-
-    private static readonly HashSet<string> UsCountryVariants = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "US", "USA", "U.S.", "U.S.A.", "United States", "United States of America"
-    };
+    // US-location reference data lives in UsLocationHelper (shared with all ATS handlers).
 
     private static void ParseLocation(
         string raw, bool isRemoteFlag,
@@ -538,16 +486,16 @@ public partial class AshbyJobsJobHandler : IJobHandler
         if (parts.Length >= 2)
         {
             var part2 = parts[1].Trim();
-            if (UsStateAbbrs.Contains(part2))            state = part2;
-            else if (UsStateNames.Contains(part2))       state = part2;
-            else if (UsCountryVariants.Contains(part2))  { /* country already US */ }
-            else if (part2.Length > 2)                   country = part2;
+            if (UsLocationHelper.StateAbbrs.Contains(part2))            state = part2;
+            else if (UsLocationHelper.StateNames.Contains(part2))       state = part2;
+            else if (UsLocationHelper.CountryVariants.Contains(part2))  { /* country already US */ }
+            else if (part2.Length > 2)                                  country = part2;
         }
 
         if (parts.Length >= 3)
         {
             var part3 = parts[2].Trim();
-            country = UsCountryVariants.Contains(part3) ? "US" : part3;
+            country = UsLocationHelper.CountryVariants.Contains(part3) ? "US" : part3;
         }
     }
 }
