@@ -252,16 +252,29 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// Allowed CORS origins = built-in defaults + anything in config "Cors:AllowedOrigins"
+// (array). On Railway, add origins via env vars without recompiling, e.g.
+//   Cors__AllowedOrigins__0 = https://ops.careerpanda.ai
+var corsOrigins = new List<string>
+{
+    config.DeploymentURLsConfig.UIURL.TrimEnd('/'),
+    "http://localhost:4200",
+    "http://localhost:5280",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://bg-job-production.up.railway.app",
+};
+corsOrigins.AddRange(configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? []);
+var allowedOrigins = corsOrigins
+    .Where(o => !string.IsNullOrWhiteSpace(o))
+    .Select(o => o.TrimEnd('/'))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
-        policy.WithOrigins(
-                config.DeploymentURLsConfig.UIURL.TrimEnd('/'),
-                "http://localhost:4200",
-                "http://localhost:5280",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "https://bg-job-production.up.railway.app")
+        policy.WithOrigins(allowedOrigins)
             .AllowAnyMethod()
             .AllowAnyHeader()
             .AllowCredentials());
