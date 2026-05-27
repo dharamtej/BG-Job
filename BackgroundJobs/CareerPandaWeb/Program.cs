@@ -258,7 +258,10 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(
                 config.DeploymentURLsConfig.UIURL.TrimEnd('/'),
                 "http://localhost:4200",
-                "http://localhost:5280")
+                "http://localhost:5280",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "https://bg-job-production.up.railway.app")
             .AllowAnyMethod()
             .AllowAnyHeader()
             .AllowCredentials());
