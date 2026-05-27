@@ -181,6 +181,18 @@ public class FetchJobController : CoreController
         return await _fetchBl.GetStatsByHandlerAsync();
     }
 
+    /// <summary>
+    /// Board-token health per ATS source: counts of VALID / INVALID / EMPTY / UNKNOWN tokens.
+    /// </summary>
+    [HttpGet]
+    [Route("api/fetchjobs/stats/tokens")]
+    public async Task<FrameworkResponse> GetTokenStats()
+    {
+        ApplicationContext.CorrelationId = Guid.NewGuid().ToString();
+        ApplicationContext.UserId        = UserId;
+        return await _fetchBl.GetTokenStatsAsync();
+    }
+
     // ── Status & monitoring ────────────────────────────────────────────────────
 
     /// <summary>

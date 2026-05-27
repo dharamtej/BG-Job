@@ -94,6 +94,12 @@ public class JobFetchBL
         return new FrameworkResponse { Status = Status.Success, Entity = handlers };
     }
 
+    public async Task<FrameworkResponse> GetTokenStatsAsync()
+    {
+        var tokens = await _fetchDa.GetTokenStatsAsync();
+        return new FrameworkResponse { Status = Status.Success, Entity = tokens };
+    }
+
     public Task<FrameworkResponse> GetFetchRunsAsync(
         int pageNumber, int pageSize,
         string? category = null, string? status = null)

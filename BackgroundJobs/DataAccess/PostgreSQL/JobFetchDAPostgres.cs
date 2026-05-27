@@ -62,6 +62,7 @@ public class JobFetchDAPostgres : IJobFetchDA
             c.StartupJob    += s.Classifications.StartupJob;
             c.NonProfitJob  += s.Classifications.NonProfitJob;
             c.UniversityJob += s.Classifications.UniversityJob;
+            c.Government    += s.Classifications.Government;
         }
 
         return overview;
@@ -135,9 +136,47 @@ public class JobFetchDAPostgres : IJobFetchDA
                     StartupJob    = g.Sum(x => x.IsStartupJob   == true ? 1 : 0),
                     NonProfitJob  = g.Sum(x => x.IsNonProfitJob == true ? 1 : 0),
                     UniversityJob = g.Sum(x => x.IsUniversityJob == true ? 1 : 0),
+                    Government    = g.Sum(x => x.CompanyType == "Government" ? 1 : 0),
                 }
             })
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<List<TokenStatusCounts>> GetTokenStatsAsync(CancellationToken cancellationToken = default)
+    {
+        return new List<TokenStatusCounts>
+        {
+            await TokenCountsAsync("Greenhouse", _db.GreenhouseBoardTokens.Select(t => (string?)t.Status), cancellationToken),
+            await TokenCountsAsync("Lever",      _db.LeverBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
+            await TokenCountsAsync("Ashby",      _db.AshbyBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
+            await TokenCountsAsync("Workday",    _db.WorkdayBoardTokens.Select(t => (string?)t.Status),    cancellationToken),
+            await TokenCountsAsync("iCIMS",      _db.IcimsBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
+            await TokenCountsAsync("BambooHR",   _db.BambooHrBoardTokens.Select(t => (string?)t.Status),   cancellationToken),
+            await TokenCountsAsync("Recruitee",  _db.RecruiteeBoardTokens.Select(t => (string?)t.Status),  cancellationToken),
+        };
+    }
+
+    // Group one token table's status column into valid/invalid/empty/unknown buckets.
+    private static async Task<TokenStatusCounts> TokenCountsAsync(
+        string source, IQueryable<string?> statuses, CancellationToken ct)
+    {
+        var rows = await statuses
+            .GroupBy(s => s)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var c = new TokenStatusCounts { Source = source };
+        foreach (var r in rows)
+        {
+            c.Total += r.Count;
+            switch ((r.Status ?? "").ToUpperInvariant())
+            {
+                case "VALID":   c.Valid   += r.Count; break;
+                case "INVALID": c.Invalid += r.Count; break;
+                default:        c.Unknown += r.Count; break;   // UNKNOWN / EMPTY / null / other
+            }
+        }
+        return c;
     }
 
     // ── Fetch Run ────────────────────────────────────────────────────────────

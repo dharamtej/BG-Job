@@ -14,6 +14,9 @@ public interface IJobFetchDA
     /// <summary>Per-handler (source) roll-up incl. classification counts and latest run.</summary>
     Task<List<HandlerStats>> GetStatsByHandlerAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Board-token health (valid/invalid/empty/unknown) per ATS source.</summary>
+    Task<List<TokenStatusCounts>> GetTokenStatsAsync(CancellationToken cancellationToken = default);
+
     // ── Fetch Run ───────────────────────────────────────────────────────────
     Task<FrameworkResponse> CreateFetchRunAsync(ApiJobFetchRun run);
 

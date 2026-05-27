@@ -17,6 +17,17 @@ public class ClassificationCounts
     public int StartupJob    { get; set; }
     public int NonProfitJob  { get; set; }
     public int UniversityJob { get; set; }
+    public int Government    { get; set; }
+}
+
+/// <summary>Board-token health counts for one ATS source.</summary>
+public class TokenStatusCounts
+{
+    public string Source  { get; set; } = string.Empty;
+    public int    Valid   { get; set; }   // status = VALID
+    public int    Invalid { get; set; }   // status = INVALID
+    public int    Unknown { get; set; }   // UNKNOWN / EMPTY / null / never-checked / other
+    public int    Total   { get; set; }
 }
 
 /// <summary>Latest fetch-run summary for one handler/category.</summary>
