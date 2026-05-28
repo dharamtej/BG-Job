@@ -162,16 +162,24 @@ public class JobFetchDAPostgres : IJobFetchDA
 
     public async Task<List<TokenStatusCounts>> GetTokenStatsAsync(CancellationToken cancellationToken = default)
     {
-        return new List<TokenStatusCounts>
+        var result = new List<TokenStatusCounts>();
+        async Task Add(string source, IQueryable<string?> q)
         {
-            await TokenCountsAsync("Greenhouse", _db.GreenhouseBoardTokens.Select(t => (string?)t.Status), cancellationToken),
-            await TokenCountsAsync("Lever",      _db.LeverBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
-            await TokenCountsAsync("Ashby",      _db.AshbyBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
-            await TokenCountsAsync("Workday",    _db.WorkdayBoardTokens.Select(t => (string?)t.Status),    cancellationToken),
-            await TokenCountsAsync("iCIMS",      _db.IcimsBoardTokens.Select(t => (string?)t.Status),      cancellationToken),
-            await TokenCountsAsync("BambooHR",   _db.BambooHrBoardTokens.Select(t => (string?)t.Status),   cancellationToken),
-            await TokenCountsAsync("Recruitee",  _db.RecruiteeBoardTokens.Select(t => (string?)t.Status),  cancellationToken),
-        };
+            try { result.Add(await TokenCountsAsync(source, q, cancellationToken)); }
+            catch (PostgresException ex) when (ex.SqlState == "42P01")   // undefined_table
+            { _logger.LogWarning("[Tokens] {Source}: table not present in this DB — returning zeros", source); result.Add(new TokenStatusCounts { Source = source }); }
+            catch (Exception ex)
+            { _logger.LogWarning(ex, "[Tokens] {Source}: unavailable — returning zeros", source); result.Add(new TokenStatusCounts { Source = source }); }
+        }
+
+        await Add("Greenhouse", _db.GreenhouseBoardTokens.Select(t => (string?)t.Status));
+        await Add("Lever",      _db.LeverBoardTokens.Select(t => (string?)t.Status));
+        await Add("Ashby",      _db.AshbyBoardTokens.Select(t => (string?)t.Status));
+        await Add("Workday",    _db.WorkdayBoardTokens.Select(t => (string?)t.Status));
+        await Add("iCIMS",      _db.IcimsBoardTokens.Select(t => (string?)t.Status));
+        await Add("BambooHR",   _db.BambooHrBoardTokens.Select(t => (string?)t.Status));
+        await Add("Recruitee",  _db.RecruiteeBoardTokens.Select(t => (string?)t.Status));
+        return result;
     }
 
     // Count one token table's status column into valid/invalid/unknown buckets.
