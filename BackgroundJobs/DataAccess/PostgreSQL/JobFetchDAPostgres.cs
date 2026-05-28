@@ -160,14 +160,34 @@ public class JobFetchDAPostgres : IJobFetchDA
             .ToListAsync(cancellationToken);
     }
 
+    // Process-wide skip-list for token sources whose table is known to be missing.
+    // Stops the dashboard's 5s poll from spamming the Postgres error log.
+    // TTL means we'll retry after the table is (potentially) created — no restart needed.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _missingTokenSources = new();
+    private static readonly TimeSpan _missingTokenTtl = TimeSpan.FromMinutes(5);
+
     public async Task<List<TokenStatusCounts>> GetTokenStatsAsync(CancellationToken cancellationToken = default)
     {
         var result = new List<TokenStatusCounts>();
         async Task Add(string source, IQueryable<string?> q)
         {
-            try { result.Add(await TokenCountsAsync(source, q, cancellationToken)); }
+            // If we recently observed this source's table missing, return zeros without querying.
+            if (_missingTokenSources.TryGetValue(source, out var until) && until > DateTime.UtcNow)
+            {
+                result.Add(new TokenStatusCounts { Source = source });
+                return;
+            }
+            try
+            {
+                result.Add(await TokenCountsAsync(source, q, cancellationToken));
+                _missingTokenSources.TryRemove(source, out _);   // success — clear any prior skip
+            }
             catch (PostgresException ex) when (ex.SqlState == "42P01")   // undefined_table
-            { _logger.LogWarning("[Tokens] {Source}: table not present in this DB — returning zeros", source); result.Add(new TokenStatusCounts { Source = source }); }
+            {
+                _missingTokenSources[source] = DateTime.UtcNow + _missingTokenTtl;
+                _logger.LogWarning("[Tokens] {Source}: table not present — suppressing queries for {Min} min", source, _missingTokenTtl.TotalMinutes);
+                result.Add(new TokenStatusCounts { Source = source });
+            }
             catch (Exception ex)
             { _logger.LogWarning(ex, "[Tokens] {Source}: unavailable — returning zeros", source); result.Add(new TokenStatusCounts { Source = source }); }
         }
