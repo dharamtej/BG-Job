@@ -23,12 +23,11 @@ public class RunAllJobsJobHandler : IJobHandler
         // ── ATS board-token sources (each internally parallel) ──────────────
         // Greenhouse is intentionally last among ATS — it has the largest token
         // set (17K+) and the heaviest per-board cost (N+1 detail fetches).
+        // Recruitee, BambooHR and iCIMS are temporarily excluded — their parsers
+        // need rework (see session notes). Re-add once those are fixed.
         "LeverJobs",
         "AshbyJobs",
         "WorkdayJobs",
-        "IcimsJobs",
-        "BambooHrJobs",
-        "RecruiteeJobs",
         "GreenhouseJobs",
         // ── Free / unlimited API sources ────────────────────────────────────
         // JSearch-backed sources (AllJobs, ContractJobs, H1BJobs, PrimeVendorJobs)
@@ -39,8 +38,8 @@ public class RunAllJobsJobHandler : IJobHandler
         "JobicyJobs",       // Jobicy — free
         "StartupJobs",      // The Muse (company_size=Startup,Small) — free
         "NonProfitJobs",    // The Muse (company_size=Non-Profit) — free
-        // ── Post-processing — must run after fetches populate raw_jobs ───────
-        "H1BSponsorEnrichment",   // Wikipedia lookups — free
+        // Post-processing (H1B Sponsor Enrichment, Company Enrichment) is
+        // intentionally excluded — user runs those manually on demand.
     ];
 
     // Resolve handlers lazily (not via constructor) — injecting IEnumerable<IJobHandler>
@@ -97,23 +96,34 @@ public class RunAllJobsJobHandler : IJobHandler
             _logger.LogInformation("[RunAll] [{N}/{Total}] Starting {Child} (RunId={RunId})",
                 i + 1, total, childType, childRequest.JobId);
 
+            // Per-child linked CTS — fires when either the parent chain is cancelled OR the user
+            // cancels this specific child by its runId from the dashboard.
+            using var childCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var cancelReg = _serviceProvider.GetRequiredService<JobCancellationRegistry>();
+            cancelReg.Register(childRequest.JobId, childCts);
             try
             {
-                await handler.ExecuteAsync(childRequest, childProgress, cancellationToken);
+                await handler.ExecuteAsync(childRequest, childProgress, childCts.Token);
                 succeeded++;
                 _logger.LogInformation("[RunAll] [{N}/{Total}] Completed {Child}", i + 1, total, childType);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning("[RunAll] Cancelled during {Child} — stopping chain", childType);
+                _logger.LogWarning("[RunAll] Parent cancelled during {Child} — stopping chain", childType);
                 throw;
+            }
+            catch (OperationCanceledException)
+            {
+                // Only THIS child was cancelled — record as failure but continue to the next.
+                failed++;
+                _logger.LogWarning("[RunAll] {Child} cancelled by user — continuing with next", childType);
             }
             catch (Exception ex)
             {
-                // One child failing must not abort the whole chain — log and move on.
                 failed++;
                 _logger.LogError(ex, "[RunAll] {Child} failed — continuing with next", childType);
             }
+            finally { cancelReg.Remove(childRequest.JobId); }
 
             int pct = (int)((double)(i + 1) / total * 100);
             await progress.ReportProgressAsync(pct,

@@ -46,18 +46,20 @@ public class JobBL
 
     public async Task<FrameworkResponse> CancelJobAsync(string jobId)
     {
-        var response = new FrameworkResponse { Status = Status.Failed };
+        // Fire the cancellation token first — this is what actually stops in-flight work,
+        // and it succeeds even for chain children that don't have their own BackgroundTask row.
+        var cancelled = _cancellationRegistry.TryCancel(jobId);
 
         var jobResponse = await _jobDa.GetJobAsync(jobId);
-        if (jobResponse.Status != Status.Success)
+        if (jobResponse.Status == Status.Success)
         {
-            response.Message = "Job not found.";
-            return response;
+            return await _jobDa.UpdateJobStatusAsync(jobId, JobStatus.Cancelled, errorMessage: "Cancelled by user.");
         }
 
-        _cancellationRegistry.TryCancel(jobId);
-        response = await _jobDa.UpdateJobStatusAsync(jobId, JobStatus.Cancelled, errorMessage: "Cancelled by user.");
-        return response;
+        if (cancelled)
+            return new FrameworkResponse { Status = Status.Success, Message = "Cancel requested." };
+
+        return new FrameworkResponse { Status = Status.Failed, Message = "Job not found or already finished." };
     }
 
     public async Task<FrameworkResponse> QueueBackgroundJobAsync(BackgroundTask job, string userId)

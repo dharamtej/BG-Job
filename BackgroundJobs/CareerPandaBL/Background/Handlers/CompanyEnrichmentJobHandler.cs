@@ -76,14 +76,32 @@ public class CompanyEnrichmentJobHandler : IJobHandler
         var input = ParseInput(request.InputPayload);
         var http  = _http.CreateClient("Enrichment");
 
-        int totalProcessed = 0, updated = 0, logos = 0, abouts = 0, websites = 0, sizes = 0, skipped = 0;
+        // Create a fetch-run row so this job is visible in Run History + per-handler stats.
+        var run = new ApiJobFetchRun
+        {
+            Id               = request.JobId,
+            BackgroundTaskId = request.JobId,
+            JobCategory      = "CompanyEnrichment",
+            ApiSource        = "Enrichment",
+            Status           = "Running",
+            StartedAt        = DateTime.UtcNow,
+            CreatedById      = request.UserId
+        };
+        using (var initScope = _scopeFactory.CreateScope())
+        {
+            var initDa = initScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await initDa.CreateFetchRunAsync(run);
+        }
+
+        int totalProcessed = 0, updated = 0, logos = 0, abouts = 0, websites = 0, sizes = 0, skipped = 0, errors = 0;
         int afterId = 0, batchNo = 0;
 
         using var progressLock = new SemaphoreSlim(1, 1);
         var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = input.MaxParallel, CancellationToken = cancellationToken };
 
         await progress.ReportProgressAsync(0, "Starting company enrichment…");
-
+        try
+        {
         while (!cancellationToken.IsCancellationRequested)
         {
             List<ApiCompany> batch;
@@ -145,16 +163,50 @@ public class CompanyEnrichmentJobHandler : IJobHandler
                     if (logoUrl != null || about != null || website != null || careerPage != null || size != null) Interlocked.Increment(ref updated);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex) { _logger.LogWarning(ex, "[CompanyEnrich] Failed for {Company}", company.CompanyName); }
+                catch (Exception ex) { Interlocked.Increment(ref errors); _logger.LogWarning(ex, "[CompanyEnrich] Failed for {Company}", company.CompanyName); }
 
                 var done = Interlocked.Increment(ref totalProcessed);
                 if (done % 25 == 0)
                 {
                     await progressLock.WaitAsync(ct);
-                    try { await progress.ReportProgressAsync(0, $"Batch {batchNo} — processed {done}, updated {Volatile.Read(ref updated)} (logos {Volatile.Read(ref logos)}, sites {Volatile.Read(ref websites)}, size {Volatile.Read(ref sizes)}, about {Volatile.Read(ref abouts)})"); }
+                    try
+                    {
+                        await progress.ReportProgressAsync(0, $"Batch {batchNo} — processed {done}, updated {Volatile.Read(ref updated)} (logos {Volatile.Read(ref logos)}, sites {Volatile.Read(ref websites)}, size {Volatile.Read(ref sizes)}, about {Volatile.Read(ref abouts)})");
+                        // Persist live stats so the dashboard shows progress.
+                        using var sScope = _scopeFactory.CreateScope();
+                        var sDa = sScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                        await sDa.UpdateFetchRunStatsAsync(run.Id,
+                            totalFetched:  done,
+                            totalInserted: Volatile.Read(ref updated),
+                            totalUpdated:  Volatile.Read(ref logos),
+                            totalSkipped:  Volatile.Read(ref skipped),
+                            totalErrors:   Volatile.Read(ref errors),
+                            pagesFetched:  batchNo);
+                    }
                     finally { progressLock.Release(); }
                 }
             });
+        }
+            using (var doneScope = _scopeFactory.CreateScope())
+            {
+                var doneDa = doneScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                await doneDa.UpdateFetchRunStatsAsync(run.Id, totalProcessed, updated, logos, skipped, errors, batchNo);
+                await doneDa.CompleteFetchRunAsync(run.Id, "Completed");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Cancelled", "Cancelled by user.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            using var failScope = _scopeFactory.CreateScope();
+            var failDa = failScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await failDa.CompleteFetchRunAsync(run.Id, "Failed", ex.Message);
+            throw;
         }
 
         _logger.LogInformation("[CompanyEnrich] Done — processed {P} updated {U} logos {L} sites {W} size {Z} about {A} skipped {S}",

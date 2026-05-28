@@ -141,9 +141,10 @@ public class FetchJobController : CoreController
 
     /// <summary>
     /// Trigger all FREE/unlimited job fetches in sequence within a single task: the ATS
-    /// board-token sources (Lever → … → Recruitee → Greenhouse last), then Adzuna, Government, RemoteOK,
-    /// Jobicy, Startup, NonProfit, then H1B sponsor enrichment last. JSearch-quota sources
-    /// (AllJobs, Contract, H1B, PrimeVendor) are excluded.
+    /// board-token sources (Lever → Ashby → Workday → Greenhouse), then Adzuna, Government,
+    /// RemoteOK, Jobicy, Startup, NonProfit. JSearch-quota sources (AllJobs, Contract, H1B,
+    /// PrimeVendor) are excluded; iCIMS / BambooHR / Recruitee are temporarily excluded pending
+    /// parser fixes. Enrichment jobs (H1B Sponsor, Company) are manual-only — trigger separately.
     /// Each runs to completion before the next starts, and each records its own fetch run.
     /// Returns immediately with the chain's task ID; poll GET /api/fetchjobs/run/{runId} for overall progress.
     /// </summary>
