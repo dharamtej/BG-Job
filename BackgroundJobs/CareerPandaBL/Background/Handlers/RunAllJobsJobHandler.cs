@@ -7,6 +7,8 @@
 //        its own api.job_fetch_runs row (fresh JobId) so it shows up individually
 //        under GET /api/fetchjobs/runs. A failure in one child is logged and the
 //        chain continues with the next.
+using CareerPanda.DataAccess.DA;
+using CareerPanda.DataAccess.Entities.Api;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -23,11 +25,11 @@ public class RunAllJobsJobHandler : IJobHandler
         // ── ATS board-token sources (each internally parallel) ──────────────
         // Greenhouse is intentionally last among ATS — it has the largest token
         // set (17K+) and the heaviest per-board cost (N+1 detail fetches).
-        // Recruitee, BambooHR and iCIMS are temporarily excluded — their parsers
-        // need rework (see session notes). Re-add once those are fixed.
+        // BambooHR and iCIMS are temporarily excluded — their parsers need rework.
         "LeverJobs",
         "AshbyJobs",
         "WorkdayJobs",
+        "RecruiteeJobs",
         "GreenhouseJobs",
         // ── Free / unlimited API sources ────────────────────────────────────
         // JSearch-backed sources (AllJobs, ContractJobs, H1BJobs, PrimeVendorJobs)
@@ -36,10 +38,13 @@ public class RunAllJobsJobHandler : IJobHandler
         "GovernmentJobs",   // USAJobs.gov — free
         "RemoteOkJobs",     // RemoteOK — free
         "JobicyJobs",       // Jobicy — free
+        "RemotiveJobs",     // Remotive — free (contract/freelance friendly)
+        "WeWorkRemotelyJobs", // WeWorkRemotely — free RSS
         "StartupJobs",      // The Muse (company_size=Startup,Small) — free
         "NonProfitJobs",    // The Muse (company_size=Non-Profit) — free
-        // Post-processing (H1B Sponsor Enrichment, Company Enrichment) is
-        // intentionally excluded — user runs those manually on demand.
+        // ── Post-processing — runs after every fetch refreshes classification flags
+        "ReclassifyExisting",
+        // H1B Sponsor Enrichment and Company Enrichment stay manual-only.
     ];
 
     // Resolve handlers lazily (not via constructor) — injecting IEnumerable<IJobHandler>
@@ -55,16 +60,52 @@ public class RunAllJobsJobHandler : IJobHandler
         _logger          = logger;
     }
 
+    // ── Run-once guard ───────────────────────────────────────────────────────
+    // Prevents a second chain from starting if one is already in progress (e.g.
+    // a scheduled trigger firing while a previous run is still going). Without
+    // this you can pile up parallel chains and exhaust API quotas + DB pool.
+    private static int _running;
+
     public async Task ExecuteAsync(
         JobWorkRequest request,
         IJobProgressReporter progress,
         CancellationToken cancellationToken)
     {
+        // Atomic 0→1 swap: only one chain owns the slot at a time.
+        if (Interlocked.Exchange(ref _running, 1) == 1)
+        {
+            _logger.LogWarning("[RunAll] Skipped — another Run All chain is already in progress.");
+            await progress.ReportProgressAsync(100, "Skipped — another Run All chain is already running.");
+            return;
+        }
+
         var handlers   = _serviceProvider.GetServices<IJobHandler>();
         int total      = ChildJobTypes.Length;
         int succeeded  = 0, failed = 0, skipped = 0;
 
+        // Parent fetch_run so the chain appears as a single row in Run History with
+        // aggregated counts. Each child still gets its own row separately.
+        var chainRun = new ApiJobFetchRun
+        {
+            Id               = request.JobId,
+            BackgroundTaskId = request.JobId,
+            JobCategory      = "RunAllJobs",
+            ApiSource        = "Chain",
+            Status           = "Running",
+            StartedAt        = DateTime.UtcNow,
+            MaxPages         = total,
+            LocationFilter   = "Chain",
+            CreatedById      = request.UserId
+        };
+        using (var s = _serviceProvider.CreateScope())
+        {
+            var da = s.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await da.CreateFetchRunAsync(chainRun);
+        }
+
         await progress.ReportProgressAsync(0, $"Starting job chain — {total} jobs queued.");
+        try
+        {
 
         for (int i = 0; i < ChildJobTypes.Length; i++)
         {
@@ -128,14 +169,53 @@ public class RunAllJobsJobHandler : IJobHandler
             int pct = (int)((double)(i + 1) / total * 100);
             await progress.ReportProgressAsync(pct,
                 $"[{i + 1}/{total}] {childType} done — Succeeded: {succeeded}, Failed: {failed}, Skipped: {skipped}");
+
+            // Live stats update on the chain's own fetch_run so the dashboard's Run History reflects progress.
+            using var liveScope = _serviceProvider.CreateScope();
+            var liveDa = liveScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await liveDa.UpdateFetchRunStatsAsync(chainRun.Id,
+                totalFetched:  i + 1,
+                totalInserted: succeeded,
+                totalUpdated:  0,
+                totalSkipped:  skipped,
+                totalErrors:   failed,
+                pagesFetched:  i + 1);
         }
 
-        _logger.LogInformation(
-            "[RunAll] Chain done — Total={T} Succeeded={S} Failed={F} Skipped={K}",
-            total, succeeded, failed, skipped);
+            _logger.LogInformation(
+                "[RunAll] Chain done — Total={T} Succeeded={S} Failed={F} Skipped={K}",
+                total, succeeded, failed, skipped);
 
-        await progress.ReportProgressAsync(100,
-            $"Job chain complete — {succeeded}/{total} succeeded, {failed} failed, {skipped} skipped.");
+            using (var doneScope = _serviceProvider.CreateScope())
+            {
+                var doneDa = doneScope.ServiceProvider.GetRequiredService<IJobFetchDA>();
+                await doneDa.UpdateFetchRunStatsAsync(chainRun.Id, total, succeeded, 0, skipped, failed, total);
+                await doneDa.CompleteFetchRunAsync(chainRun.Id, "Completed");
+            }
+
+            await progress.ReportProgressAsync(100,
+                $"Job chain complete — {succeeded}/{total} succeeded, {failed} failed, {skipped} skipped.");
+        }
+        catch (OperationCanceledException)
+        {
+            using var s = _serviceProvider.CreateScope();
+            var da = s.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await da.UpdateFetchRunStatsAsync(chainRun.Id, total, succeeded, 0, skipped, failed, total);
+            await da.CompleteFetchRunAsync(chainRun.Id, "Cancelled", "Cancelled by user.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            using var s = _serviceProvider.CreateScope();
+            var da = s.ServiceProvider.GetRequiredService<IJobFetchDA>();
+            await da.CompleteFetchRunAsync(chainRun.Id, "Failed", ex.Message);
+            throw;
+        }
+        finally
+        {
+            // Release the run-once slot so the next scheduled fire (or a manual trigger) can proceed.
+            Interlocked.Exchange(ref _running, 0);
+        }
     }
 
     // Maps a child handler's 0-100 progress onto [slice * index, slice * (index+1)]

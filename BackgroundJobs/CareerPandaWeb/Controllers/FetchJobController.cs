@@ -141,10 +141,11 @@ public class FetchJobController : CoreController
 
     /// <summary>
     /// Trigger all FREE/unlimited job fetches in sequence within a single task: the ATS
-    /// board-token sources (Lever → Ashby → Workday → Greenhouse), then Adzuna, Government,
-    /// RemoteOK, Jobicy, Startup, NonProfit. JSearch-quota sources (AllJobs, Contract, H1B,
-    /// PrimeVendor) are excluded; iCIMS / BambooHR / Recruitee are temporarily excluded pending
-    /// parser fixes. Enrichment jobs (H1B Sponsor, Company) are manual-only — trigger separately.
+    /// board-token sources (Lever → Ashby → Workday → Recruitee → Greenhouse), then Adzuna,
+    /// Government, RemoteOK, Jobicy, Remotive, WeWorkRemotely, Startup, NonProfit, then
+    /// ReclassifyExisting at the end. JSearch-quota sources (AllJobs, Contract, H1B, PrimeVendor)
+    /// are excluded; iCIMS / BambooHR are temporarily excluded pending parser fixes. Enrichment
+    /// jobs (H1B Sponsor, Company) are manual-only — trigger separately.
     /// Each runs to completion before the next starts, and each records its own fetch run.
     /// Returns immediately with the chain's task ID; poll GET /api/fetchjobs/run/{runId} for overall progress.
     /// </summary>
@@ -161,6 +162,27 @@ public class FetchJobController : CoreController
     [Route("api/fetchjobs/companyenrichment/run")]
     public Task<FrameworkResponse> TriggerCompanyEnrichment([FromBody] JobFetchInput? input) =>
         TriggerFetch("companyenrichment", input);
+
+    /// <summary>
+    /// One-time / on-demand backfill: re-run JobClassifier across every existing api.raw_jobs row.
+    /// Updates only the 12 classification flag columns. Optional body: {"BatchSize":500,"MaxParallel":8}.
+    /// </summary>
+    [HttpPost]
+    [Route("api/fetchjobs/reclassifyexisting/run")]
+    public Task<FrameworkResponse> TriggerReclassifyExisting([FromBody] JobFetchInput? input) =>
+        TriggerFetch("reclassifyexisting", input);
+
+    /// <summary>Trigger Remotive (public JSON — remote contract / freelance / FTE).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/remotivejobs/run")]
+    public Task<FrameworkResponse> TriggerRemotiveJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("remotivejobs", input);
+
+    /// <summary>Trigger WeWorkRemotely (public RSS — remote roles).</summary>
+    [HttpPost]
+    [Route("api/fetchjobs/weworkremotelyjobs/run")]
+    public Task<FrameworkResponse> TriggerWeWorkRemotelyJobs([FromBody] JobFetchInput? input) =>
+        TriggerFetch("weworkremotelyjobs", input);
 
     // ── Dashboard stats ─────────────────────────────────────────────────────────
 

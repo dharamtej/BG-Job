@@ -35,7 +35,10 @@ public class JobFetchBL
             { "bamboohrjobs",         "BambooHrJobs"         },
             { "recruiteejobs",        "RecruiteeJobs"        },
             { "runalljobs",           "RunAllJobs"           },
-            { "companyenrichment",    "CompanyEnrichment"    }
+            { "companyenrichment",    "CompanyEnrichment"    },
+            { "reclassifyexisting",   "ReclassifyExisting"   },
+            { "remotivejobs",         "RemotiveJobs"         },
+            { "weworkremotelyjobs",   "WeWorkRemotelyJobs"   }
         };
 
     private readonly JobBL _jobBl;

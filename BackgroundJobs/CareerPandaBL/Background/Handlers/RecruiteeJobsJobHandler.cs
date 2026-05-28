@@ -202,11 +202,10 @@ public class RecruiteeJobsJobHandler : IJobHandler
 
         if (!resp.IsSuccessStatusCode)
         {
-            if (resp.StatusCode is HttpStatusCode.NotFound
-                                or HttpStatusCode.Forbidden
-                                or HttpStatusCode.Unauthorized
-                                or HttpStatusCode.BadRequest)
+            // 404 / 400 = subdomain genuinely doesn't exist → permanent INVALID.
+            if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
                 return ([], httpCode, "INVALID", 0);
+            // 401/403/5xx/429 → transient. Leave status unchanged for retry.
             return ([], httpCode, null, 0);
         }
 

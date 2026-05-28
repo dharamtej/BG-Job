@@ -226,13 +226,13 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             _logger.LogWarning("[Greenhouse] {Status} fetching job list for {Token}",
                 (int)listResp.StatusCode, token.BoardToken);
 
-            // Definitive failures
-            if (listResp.StatusCode is System.Net.HttpStatusCode.NotFound
-                                    or System.Net.HttpStatusCode.Forbidden
-                                    or System.Net.HttpStatusCode.Unauthorized)
+            // Definitive failure — board genuinely doesn't exist.
+            if (listResp.StatusCode == System.Net.HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
 
-            // Transient (5xx, 429) — leave status unchanged
+            // 401/403 used to be marked INVALID forever, but they're frequently caused by
+            // Cloudflare WAF / rate-limit under burst load — treat as transient now.
+            // 5xx / 429 / network errors are also transient — status unchanged so it retries.
             return ([], httpCode, null, 0);
         }
 

@@ -26,4 +26,11 @@ public record JobFetchInput
     /// Pass any explicit value (e.g. "United States", "Texas") for a single-location search.
     /// </summary>
     public string? Location { get; set; }
+
+    /// <summary>
+    /// Adzuna-only: when set to "contract" or "permanent", appends &amp;contract_type=… to the API
+    /// query. Used to fetch contract-only sweeps for C2C/1099/Contract-to-Hire coverage.
+    /// Null (default) = no filter (current behaviour preserved).
+    /// </summary>
+    public string? ContractType { get; set; }
 }

@@ -63,6 +63,7 @@ public class JobFetchDAPostgres : IJobFetchDA
             c.NonProfitJob  += s.Classifications.NonProfitJob;
             c.UniversityJob += s.Classifications.UniversityJob;
             c.Government    += s.Classifications.Government;
+            c.ContractToHire += s.Classifications.ContractToHire;
             var w = overview.WorkModes;
             w.Remote     += s.WorkModes.Remote;
             w.Hybrid     += s.WorkModes.Hybrid;
@@ -145,6 +146,7 @@ public class JobFetchDAPostgres : IJobFetchDA
                     NonProfitJob  = g.Sum(x => x.IsNonProfitJob == true ? 1 : 0),
                     UniversityJob = g.Sum(x => x.IsUniversityJob == true ? 1 : 0),
                     Government    = g.Sum(x => x.CompanyType == "Government" ? 1 : 0),
+                    ContractToHire = g.Sum(x => x.IsContractToHire == true ? 1 : 0),
                 },
                 WorkModes = new WorkModeCounts
                 {
@@ -254,6 +256,36 @@ public class JobFetchDAPostgres : IJobFetchDA
                 .SetProperty(c => c.LogoUrl,      c => logoUrl      ?? c.LogoUrl)
                 .SetProperty(c => c.UpdatedOn,    _ => DateTime.UtcNow),
             cancellationToken);
+    }
+
+    // ── Reclassify existing raw_jobs ──────────────────────────────────────────
+
+    public async Task<List<ApiRawJob>> GetRawJobsForReclassifyAsync(int afterId, int batchSize, CancellationToken cancellationToken = default)
+    {
+        return await _db.RawJobs.AsNoTracking()
+            .Where(j => j.Id > afterId)
+            .OrderBy(j => j.Id)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task UpdateClassificationFlagsAsync(ApiRawJob job, CancellationToken cancellationToken = default)
+    {
+        await _db.RawJobs.Where(j => j.Id == job.Id).ExecuteUpdateAsync(s => s
+            .SetProperty(j => j.IsC2C,            job.IsC2C)
+            .SetProperty(j => j.IsContractToHire, job.IsContractToHire)
+            .SetProperty(j => j.IsFreelanceJob,   job.IsFreelanceJob)
+            .SetProperty(j => j.IsW2,             job.IsW2)
+            .SetProperty(j => j.IsContractJob,    job.IsContractJob)
+            .SetProperty(j => j.IsPrimeVendor,    job.IsPrimeVendor)
+            .SetProperty(j => j.IsStaffing,       job.IsStaffing)
+            .SetProperty(j => j.IsH1BSponsored,   job.IsH1BSponsored)
+            .SetProperty(j => j.IsSponsored,      job.IsSponsored)
+            .SetProperty(j => j.IsStartupJob,     job.IsStartupJob)
+            .SetProperty(j => j.IsNonProfitJob,   job.IsNonProfitJob)
+            .SetProperty(j => j.IsUniversityJob,  job.IsUniversityJob)
+            .SetProperty(j => j.UpdatedOn,        DateTime.UtcNow),
+        cancellationToken);
     }
 
     // ── Fetch Run ────────────────────────────────────────────────────────────
@@ -572,6 +604,11 @@ public class JobFetchDAPostgres : IJobFetchDA
                 {
                     job.OurCompanyId = companyId;
 
+                    // Single chokepoint that tags C2C / C2H / 1099 / W2 / Contract / PrimeVendor / Staffing /
+                    // H1B / Sponsored / Startup / NonProfit / University from the job description + company name.
+                    // Preserves any flag the handler already set to true.
+                    CareerPanda.DataAccess.Util.JobClassifier.ApplyKeywordFlags(job, job.JobDescription, employmentType: job.ContractType, companyName: job.CompanyName);
+
                     ApiRawJob? existing = null;
                     if (!string.IsNullOrWhiteSpace(job.JobLink))
                         existingByLink.TryGetValue(job.JobLink!, out existing);
@@ -715,7 +752,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.GreenhouseBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }
@@ -736,7 +775,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.LeverBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }
@@ -757,7 +798,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.WorkdayBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ThenBy(t => t.SiteId)
             .ToListAsync(cancellationToken);
@@ -826,7 +869,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.AshbyBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }
@@ -847,7 +892,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.BambooHrBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }
@@ -868,7 +915,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.IcimsBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }
@@ -889,7 +938,9 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         return await _db.RecruiteeBoardTokens
             .AsNoTracking()
-            .Where(t => t.Status != "INVALID")
+            // Retry INVALID tokens after a 14-day cooldown — many INVALIDs were caused
+            // by transient WAF / rate-limit 403s, not "board doesn't exist" 404s.
+            .Where(t => t.Status != "INVALID" || t.UpdatedAt < DateTime.UtcNow.AddDays(-14))
             .OrderBy(t => t.CompanyName)
             .ToListAsync(cancellationToken);
     }

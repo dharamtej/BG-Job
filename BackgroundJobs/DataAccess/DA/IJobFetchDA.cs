@@ -28,6 +28,13 @@ public interface IJobFetchDA
     Task UpdateCompanyEnrichmentAsync(int id, string? companyType, int? companySize, string? aboutCompany,
         string? website, string? careerPage, string? logoUrl, CancellationToken cancellationToken = default);
 
+    // ── Reclassify existing raw_jobs ──────────────────────────────────────────
+    /// <summary>Load a paged batch of raw_jobs (ordered by id &gt; afterId) for re-classification.</summary>
+    Task<List<ApiRawJob>> GetRawJobsForReclassifyAsync(int afterId, int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>Overwrite all 12 classification flag columns of a raw_job in a single UPDATE.</summary>
+    Task UpdateClassificationFlagsAsync(ApiRawJob job, CancellationToken cancellationToken = default);
+
     // ── Fetch Run ───────────────────────────────────────────────────────────
     Task<FrameworkResponse> CreateFetchRunAsync(ApiJobFetchRun run);
 

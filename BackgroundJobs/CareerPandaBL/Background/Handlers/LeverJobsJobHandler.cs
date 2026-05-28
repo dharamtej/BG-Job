@@ -211,13 +211,12 @@ public class LeverJobsJobHandler : IJobHandler
         {
             _logger.LogWarning("[Lever] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
 
-            // Definitive failures — board does not exist or access permanently denied
-            if (resp.StatusCode is HttpStatusCode.NotFound
-                                or HttpStatusCode.Forbidden
-                                or HttpStatusCode.Unauthorized)
+            // 404 = board genuinely doesn't exist → permanent INVALID.
+            if (resp.StatusCode == HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
 
-            // Transient failures (5xx, 429) — return null so caller skips status update
+            // 401/403/5xx/429/network → transient (WAF/rate-limit/Cloudflare).
+            // Leave status unchanged so the board is retried next run.
             return ([], httpCode, null, 0);
         }
 

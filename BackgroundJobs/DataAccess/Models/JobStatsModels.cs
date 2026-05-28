@@ -18,6 +18,7 @@ public class ClassificationCounts
     public int NonProfitJob  { get; set; }
     public int UniversityJob { get; set; }
     public int Government    { get; set; }
+    public int ContractToHire { get; set; }
 }
 
 /// <summary>Board-token health counts for one ATS source.</summary>

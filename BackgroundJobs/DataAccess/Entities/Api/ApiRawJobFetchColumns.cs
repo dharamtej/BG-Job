@@ -108,4 +108,8 @@ public partial class ApiRawJob
 
     [Column("is_prime_vendor")]
     public bool? IsPrimeVendor { get; set; }
+
+    /// <summary>Contract-to-Hire — converts to FTE after a contract period.</summary>
+    [Column("is_contract_to_hire")]
+    public bool? IsContractToHire { get; set; }
 }

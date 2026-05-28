@@ -228,11 +228,11 @@ public class WorkdayJobsJobHandler : IJobHandler
             {
                 _logger.LogWarning("[Workday] {Status} for {Slug}/{Site}", (int)resp.StatusCode, token.CompanySlug, token.SiteId);
 
-                // Definitive failures — board does not exist or access permanently denied
-                if (resp.StatusCode is HttpStatusCode.NotFound
-                                    or HttpStatusCode.Forbidden
-                                    or HttpStatusCode.Unauthorized)
+                // 404 = site genuinely doesn't exist → permanent INVALID.
+                if (resp.StatusCode == HttpStatusCode.NotFound)
                     return ([], httpCode, "INVALID", 0);
+
+                // 401/403 used to be INVALID forever — now treated as transient (WAF / rate-limit).
 
                 // Transient failures (5xx, 429 rate-limit, etc.) — return null so caller skips status update
                 if (results.Count == 0)

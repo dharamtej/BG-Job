@@ -130,7 +130,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
                         List<ApiRawJob> jobs;
                         try
                         {
-                            jobs = await FetchAdzunaPageAsync(query, location, p, input.HoursBack, run.Id, sponsors, cancellationToken);
+                            jobs = await FetchAdzunaPageAsync(query, location, p, input.HoursBack, input.ContractType, run.Id, sponsors, cancellationToken);
                         }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
@@ -188,7 +188,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
     // ── Adzuna API fetch ──────────────────────────────────────────────────────
 
     private async Task<List<ApiRawJob>> FetchAdzunaPageAsync(
-        string roleQuery, string location, int page, int hoursBack,
+        string roleQuery, string location, int page, int hoursBack, string? contractType,
         string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
     {
         var client     = _http.CreateClient("Adzuna");
@@ -196,10 +196,15 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         var where      = Uri.EscapeDataString(location);
         var maxDaysOld = hoursBack <= 24 ? 1 : hoursBack <= 168 ? 7 : 30;
 
+        // Adzuna supports &contract_type=contract|permanent — used for contract-only sweeps.
+        var contractParam = !string.IsNullOrWhiteSpace(contractType)
+            ? $"&contract_type={Uri.EscapeDataString(contractType.ToLowerInvariant())}"
+            : string.Empty;
+
         var url = $"https://api.adzuna.com/v1/api/jobs/us/search/{page}" +
                   $"?app_id={_appId}&app_key={_appKey}" +
                   $"&results_per_page=50&what={what}&where={where}" +
-                  $"&max_days_old={maxDaysOld}&sort_by=date&content-type=application/json";
+                  $"&max_days_old={maxDaysOld}{contractParam}&sort_by=date&content-type=application/json";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         var res = await client.SendAsync(req, ct);
@@ -343,6 +348,6 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         int page, JobFetchInput input, string fetchRunId, CancellationToken ct)
     {
         var sponsors = await LoadSponsorsAsync(ct);
-        return await FetchAdzunaPageAsync(input.SearchQuery!, input.Location ?? "United States", page, input.HoursBack, fetchRunId, sponsors, ct);
+        return await FetchAdzunaPageAsync(input.SearchQuery!, input.Location ?? "United States", page, input.HoursBack, input.ContractType, fetchRunId, sponsors, ct);
     }
 }

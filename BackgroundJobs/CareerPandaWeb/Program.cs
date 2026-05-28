@@ -102,6 +102,18 @@ builder.Services.AddHttpClient("Enrichment", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 (careerpanda.ai) company-enrichment");
     c.DefaultRequestHeaders.Add("Accept", "application/json");
 });
+builder.Services.AddHttpClient("Remotive", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(60);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 (careerpanda.ai) jobs-aggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+builder.Services.AddHttpClient("WWR", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(30);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 (careerpanda.ai) jobs-aggregator");
+    c.DefaultRequestHeaders.Add("Accept", "application/rss+xml, application/xml");
+});
 
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<JobCancellationRegistry>();
@@ -164,6 +176,9 @@ builder.Services.AddSingleton<IJobHandler, IcimsJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RecruiteeJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>(); // Meta: runs all fetch handlers sequentially
 builder.Services.AddSingleton<IJobHandler, CompanyEnrichmentJobHandler>(); // Enriches api.companies (logo/about/website/career page)
+builder.Services.AddSingleton<IJobHandler, ReclassifyExistingJobsJobHandler>(); // Backfills classification flags on existing raw_jobs
+builder.Services.AddSingleton<IJobHandler, RemotiveJobsJobHandler>();           // Remote contract / freelance / FTE — public JSON
+builder.Services.AddSingleton<IJobHandler, WeWorkRemotelyJobsJobHandler>();     // Remote roles — public RSS
 // builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
 builder.Services.AddHostedService<BackgroundJobWorker>();
 
