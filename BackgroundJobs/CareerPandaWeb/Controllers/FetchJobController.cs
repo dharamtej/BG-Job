@@ -152,6 +152,15 @@ public class FetchJobController : CoreController
     public Task<FrameworkResponse> TriggerRunAllJobs([FromBody] JobFetchInput? input) =>
         TriggerFetch("runalljobs", input);
 
+    /// <summary>
+    /// Enrich api.companies — fills logo_url (square), about_company, website and career_page
+    /// for companies, updating only those columns. Body (optional): {"BatchSize":200,"MaxParallel":8}.
+    /// </summary>
+    [HttpPost]
+    [Route("api/fetchjobs/companyenrichment/run")]
+    public Task<FrameworkResponse> TriggerCompanyEnrichment([FromBody] JobFetchInput? input) =>
+        TriggerFetch("companyenrichment", input);
+
     // ── Dashboard stats ─────────────────────────────────────────────────────────
 
     /// <summary>

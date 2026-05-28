@@ -63,6 +63,14 @@ public class JobFetchDAPostgres : IJobFetchDA
             c.NonProfitJob  += s.Classifications.NonProfitJob;
             c.UniversityJob += s.Classifications.UniversityJob;
             c.Government    += s.Classifications.Government;
+            var w = overview.WorkModes;
+            w.Remote     += s.WorkModes.Remote;
+            w.Hybrid     += s.WorkModes.Hybrid;
+            w.OnSite     += s.WorkModes.OnSite;
+            w.FullTime   += s.WorkModes.FullTime;
+            w.PartTime   += s.WorkModes.PartTime;
+            w.Contract   += s.WorkModes.Contract;
+            w.Internship += s.WorkModes.Internship;
         }
 
         return overview;
@@ -137,6 +145,16 @@ public class JobFetchDAPostgres : IJobFetchDA
                     NonProfitJob  = g.Sum(x => x.IsNonProfitJob == true ? 1 : 0),
                     UniversityJob = g.Sum(x => x.IsUniversityJob == true ? 1 : 0),
                     Government    = g.Sum(x => x.CompanyType == "Government" ? 1 : 0),
+                },
+                WorkModes = new WorkModeCounts
+                {
+                    Remote     = g.Sum(x => x.WorkType == "Remote" ? 1 : 0),
+                    Hybrid     = g.Sum(x => x.WorkType == "Hybrid" ? 1 : 0),
+                    OnSite     = g.Sum(x => x.WorkType == "OnSite" ? 1 : 0),
+                    FullTime   = g.Sum(x => x.ContractType == "FullTime"   ? 1 : 0),
+                    PartTime   = g.Sum(x => x.ContractType == "PartTime"   ? 1 : 0),
+                    Contract   = g.Sum(x => x.ContractType == "Contract"   ? 1 : 0),
+                    Internship = g.Sum(x => x.ContractType == "Internship" ? 1 : 0),
                 }
             })
             .ToListAsync(cancellationToken);
@@ -156,27 +174,58 @@ public class JobFetchDAPostgres : IJobFetchDA
         };
     }
 
-    // Group one token table's status column into valid/invalid/empty/unknown buckets.
+    // Count one token table's status column into valid/invalid/unknown buckets.
+    // Simple COUNT(*) predicates translate cleanly to SQL (GroupBy on a cast projection did not).
     private static async Task<TokenStatusCounts> TokenCountsAsync(
         string source, IQueryable<string?> statuses, CancellationToken ct)
     {
-        var rows = await statuses
-            .GroupBy(s => s)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var c = new TokenStatusCounts { Source = source };
-        foreach (var r in rows)
+        var total   = await statuses.CountAsync(ct);
+        var valid   = await statuses.CountAsync(s => s == "VALID", ct);
+        var invalid = await statuses.CountAsync(s => s == "INVALID", ct);
+        return new TokenStatusCounts
         {
-            c.Total += r.Count;
-            switch ((r.Status ?? "").ToUpperInvariant())
-            {
-                case "VALID":   c.Valid   += r.Count; break;
-                case "INVALID": c.Invalid += r.Count; break;
-                default:        c.Unknown += r.Count; break;   // UNKNOWN / EMPTY / null / other
-            }
-        }
-        return c;
+            Source  = source,
+            Valid   = valid,
+            Invalid = invalid,
+            Unknown = total - valid - invalid,   // UNKNOWN / EMPTY / null / other
+            Total   = total,
+        };
+    }
+
+    // ── Company enrichment ────────────────────────────────────────────────────
+
+    public async Task<List<ApiCompany>> GetCompaniesForEnrichmentAsync(int afterId, int batchSize, CancellationToken cancellationToken = default)
+    {
+        return await _db.Companies.AsNoTracking()
+            .Where(c => c.Id > afterId)
+            .OrderBy(c => c.Id)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<string?> GetSampleCompanyUrlAsync(int ourCompanyId, CancellationToken cancellationToken = default)
+    {
+        return await _db.RawJobs.AsNoTracking()
+            .Where(j => j.OurCompanyId == ourCompanyId && j.CompanyUrl != null && j.CompanyUrl != "")
+            .Select(j => j.CompanyUrl)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task UpdateCompanyEnrichmentAsync(int id, string? companyType, int? companySize, string? aboutCompany,
+        string? website, string? careerPage, string? logoUrl, CancellationToken cancellationToken = default)
+    {
+        // COALESCE semantics — a null argument keeps the existing column value.
+        await _db.Companies
+            .Where(c => c.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.CompanyType,  c => companyType  ?? c.CompanyType)
+                .SetProperty(c => c.CompanySize,  c => companySize  ?? c.CompanySize)
+                .SetProperty(c => c.AboutCompany, c => aboutCompany ?? c.AboutCompany)
+                .SetProperty(c => c.Website,      c => website      ?? c.Website)
+                .SetProperty(c => c.CareerPage,   c => careerPage   ?? c.CareerPage)
+                .SetProperty(c => c.LogoUrl,      c => logoUrl      ?? c.LogoUrl)
+                .SetProperty(c => c.UpdatedOn,    _ => DateTime.UtcNow),
+            cancellationToken);
     }
 
     // ── Fetch Run ────────────────────────────────────────────────────────────

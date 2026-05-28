@@ -30,6 +30,18 @@ public class TokenStatusCounts
     public int    Total   { get; set; }
 }
 
+/// <summary>Counts of raw_jobs by work mode (WorkType) and employment type (ContractType).</summary>
+public class WorkModeCounts
+{
+    public int Remote     { get; set; }
+    public int Hybrid     { get; set; }
+    public int OnSite     { get; set; }
+    public int FullTime   { get; set; }
+    public int PartTime   { get; set; }
+    public int Contract   { get; set; }
+    public int Internship { get; set; }
+}
+
 /// <summary>Latest fetch-run summary for one handler/category.</summary>
 public class LatestRunSummary
 {
@@ -57,6 +69,7 @@ public class HandlerStats
     public int    ActiveJobs        { get; set; }
     public int    DistinctCompanies { get; set; }
     public ClassificationCounts Classifications { get; set; } = new();
+    public WorkModeCounts        WorkModes       { get; set; } = new();
     public LatestRunSummary?     LatestRun       { get; set; }
 }
 
@@ -70,6 +83,7 @@ public class JobStatsOverview
     public int NewCompanyWindowHours { get; set; }
     public int DistinctSources      { get; set; }
     public ClassificationCounts Classifications { get; set; } = new();
+    public WorkModeCounts        WorkModes       { get; set; } = new();
     /// <summary>Job count per source, for quick bar-chart use.</summary>
     public Dictionary<string, int> JobsBySource { get; set; } = new();
 }

@@ -172,6 +172,19 @@ public class JobController : CoreController
     }
 
     /// <summary>
+    /// List all job templates that currently have a recurring schedule.
+    /// </summary>
+    [HttpGet]
+    [Route("api/job/schedules")]
+    public async Task<FrameworkResponse> GetSchedules()
+    {
+        ApplicationContext.CorrelationId = Guid.NewGuid().ToString();
+        ApplicationContext.UserId = UserId;
+        var tasks = await _taskDa.GetScheduledTasksAsync();
+        return new FrameworkResponse { Status = Status.Success, Entity = tasks };
+    }
+
+    /// <summary>
     /// Remove the recurring schedule from a job template.
     /// </summary>
     [HttpDelete]

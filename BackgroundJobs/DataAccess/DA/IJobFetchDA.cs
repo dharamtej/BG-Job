@@ -17,6 +17,17 @@ public interface IJobFetchDA
     /// <summary>Board-token health (valid/invalid/empty/unknown) per ATS source.</summary>
     Task<List<TokenStatusCounts>> GetTokenStatsAsync(CancellationToken cancellationToken = default);
 
+    // ── Company enrichment ────────────────────────────────────────────────────
+    /// <summary>Page through companies (ordered by id) for enrichment. Returns up to batchSize rows with id &gt; afterId.</summary>
+    Task<List<ApiCompany>> GetCompaniesForEnrichmentAsync(int afterId, int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>A representative job apply/board URL for a company (used as career_page hint).</summary>
+    Task<string?> GetSampleCompanyUrlAsync(int ourCompanyId, CancellationToken cancellationToken = default);
+
+    /// <summary>Update only the enrichment columns; null arguments keep the existing value (COALESCE).</summary>
+    Task UpdateCompanyEnrichmentAsync(int id, string? companyType, int? companySize, string? aboutCompany,
+        string? website, string? careerPage, string? logoUrl, CancellationToken cancellationToken = default);
+
     // ── Fetch Run ───────────────────────────────────────────────────────────
     Task<FrameworkResponse> CreateFetchRunAsync(ApiJobFetchRun run);
 

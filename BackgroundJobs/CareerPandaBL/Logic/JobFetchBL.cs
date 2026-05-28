@@ -34,7 +34,8 @@ public class JobFetchBL
             { "icimsjobs",            "IcimsJobs"            },
             { "bamboohrjobs",         "BambooHrJobs"         },
             { "recruiteejobs",        "RecruiteeJobs"        },
-            { "runalljobs",           "RunAllJobs"           }
+            { "runalljobs",           "RunAllJobs"           },
+            { "companyenrichment",    "CompanyEnrichment"    }
         };
 
     private readonly JobBL _jobBl;

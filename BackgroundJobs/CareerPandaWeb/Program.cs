@@ -96,6 +96,12 @@ builder.Services.AddHttpClient("Recruitee", c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 jobs-aggregator");
     c.DefaultRequestHeaders.Add("Accept", "application/json");
 });
+builder.Services.AddHttpClient("Enrichment", c =>
+{
+    c.Timeout = TimeSpan.FromSeconds(15);
+    c.DefaultRequestHeaders.UserAgent.ParseAdd("CareerPanda/1.0 (careerpanda.ai) company-enrichment");
+    c.DefaultRequestHeaders.Add("Accept", "application/json");
+});
 
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<JobCancellationRegistry>();
@@ -157,6 +163,7 @@ builder.Services.AddSingleton<IJobHandler, BambooHrJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, IcimsJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RecruiteeJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>(); // Meta: runs all fetch handlers sequentially
+builder.Services.AddSingleton<IJobHandler, CompanyEnrichmentJobHandler>(); // Enriches api.companies (logo/about/website/career page)
 // builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
 builder.Services.AddHostedService<BackgroundJobWorker>();
 
