@@ -6,19 +6,30 @@ namespace CareerPanda.DataAccess.Models;
 /// <summary>Counts of raw_jobs broken down by each classification flag.</summary>
 public class ClassificationCounts
 {
+    // ── Visa / sponsorship ───────────────────────────────────────────────────
     public int H1BSponsored  { get; set; }
     public int Sponsored     { get; set; }
+    public int OptCpt        { get; set; }
+    public int TnVisa        { get; set; }
+    public int E3Visa        { get; set; }
+    public int J1Visa        { get; set; }
+    public int GreenCard     { get; set; }
+    // ── Work arrangement ─────────────────────────────────────────────────────
     public int W2            { get; set; }
     public int C2C           { get; set; }
     public int ContractJob   { get; set; }
+    public int ContractToHire { get; set; }
     public int FreelanceJob  { get; set; }
     public int PrimeVendor   { get; set; }
     public int Staffing      { get; set; }
+    // ── Company / sector ─────────────────────────────────────────────────────
     public int StartupJob    { get; set; }
     public int NonProfitJob  { get; set; }
     public int UniversityJob { get; set; }
     public int Government    { get; set; }
-    public int ContractToHire { get; set; }
+    // ── Special requirements ─────────────────────────────────────────────────
+    public int SecurityClearanceRequired { get; set; }
+    public int VeteransEligible          { get; set; }
 }
 
 /// <summary>Board-token health counts for one ATS source.</summary>

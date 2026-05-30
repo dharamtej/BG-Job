@@ -258,6 +258,12 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             _           => contractTime == "part_time" ? "PartTime" : null
         };
 
+        // WorkType: infer from description keywords; default OnSite for non-remote Adzuna jobs
+        var isRemote = ContainsAny(desc, "remote", "work from home", "wfh") ||
+                       ContainsAny(title, "remote");
+        var isHybrid = !isRemote && ContainsAny(desc, "hybrid");
+        var workType = isRemote ? "Remote" : isHybrid ? "Hybrid" : "OnSite";
+
         // ── Flag detection — applied to every job ─────────────────────────────
         var isContract    = contractType == "contract" ||
                             ContainsAny(desc, "contract", "contractor");
@@ -308,6 +314,8 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             SalaryMax         = salMax,
             SalaryRangeText   = salMin.HasValue && salMax.HasValue ? $"${salMin:N0}–${salMax:N0}/yr" : null,
             SalaryCurrency    = "USD",
+            WorkType          = workType,
+            JobWorkMode       = workType,
             ContractType      = mappedContractType,
             JobLevel          = NormalizeJobLevel(title),
             CompanyName       = companyName,

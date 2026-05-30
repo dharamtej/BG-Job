@@ -51,19 +51,26 @@ public class JobFetchDAPostgres : IJobFetchDA
             overview.TotalJobs  += s.TotalJobs;
             overview.ActiveJobs += s.ActiveJobs;
             var c = overview.Classifications;
-            c.H1BSponsored  += s.Classifications.H1BSponsored;
-            c.Sponsored     += s.Classifications.Sponsored;
-            c.W2            += s.Classifications.W2;
-            c.C2C           += s.Classifications.C2C;
-            c.ContractJob   += s.Classifications.ContractJob;
-            c.FreelanceJob  += s.Classifications.FreelanceJob;
-            c.PrimeVendor   += s.Classifications.PrimeVendor;
-            c.Staffing      += s.Classifications.Staffing;
-            c.StartupJob    += s.Classifications.StartupJob;
-            c.NonProfitJob  += s.Classifications.NonProfitJob;
-            c.UniversityJob += s.Classifications.UniversityJob;
-            c.Government    += s.Classifications.Government;
-            c.ContractToHire += s.Classifications.ContractToHire;
+            c.H1BSponsored             += s.Classifications.H1BSponsored;
+            c.Sponsored                += s.Classifications.Sponsored;
+            c.OptCpt                   += s.Classifications.OptCpt;
+            c.TnVisa                   += s.Classifications.TnVisa;
+            c.E3Visa                   += s.Classifications.E3Visa;
+            c.J1Visa                   += s.Classifications.J1Visa;
+            c.GreenCard                += s.Classifications.GreenCard;
+            c.W2                       += s.Classifications.W2;
+            c.C2C                      += s.Classifications.C2C;
+            c.ContractJob              += s.Classifications.ContractJob;
+            c.ContractToHire           += s.Classifications.ContractToHire;
+            c.FreelanceJob             += s.Classifications.FreelanceJob;
+            c.PrimeVendor              += s.Classifications.PrimeVendor;
+            c.Staffing                 += s.Classifications.Staffing;
+            c.StartupJob               += s.Classifications.StartupJob;
+            c.NonProfitJob             += s.Classifications.NonProfitJob;
+            c.UniversityJob            += s.Classifications.UniversityJob;
+            c.Government               += s.Classifications.Government;
+            c.SecurityClearanceRequired += s.Classifications.SecurityClearanceRequired;
+            c.VeteransEligible         += s.Classifications.VeteransEligible;
             var w = overview.WorkModes;
             w.Remote     += s.WorkModes.Remote;
             w.Hybrid     += s.WorkModes.Hybrid;
@@ -134,19 +141,26 @@ public class JobFetchDAPostgres : IJobFetchDA
                 DistinctCompanies = g.Select(x => x.OurCompanyId).Distinct().Count(),
                 Classifications   = new ClassificationCounts
                 {
-                    H1BSponsored  = g.Sum(x => x.IsH1BSponsored == true ? 1 : 0),
-                    Sponsored     = g.Sum(x => x.IsSponsored    == true ? 1 : 0),
-                    W2            = g.Sum(x => x.IsW2            == true ? 1 : 0),
-                    C2C           = g.Sum(x => x.IsC2C           == true ? 1 : 0),
-                    ContractJob   = g.Sum(x => x.IsContractJob  == true ? 1 : 0),
-                    FreelanceJob  = g.Sum(x => x.IsFreelanceJob == true ? 1 : 0),
-                    PrimeVendor   = g.Sum(x => x.IsPrimeVendor  == true ? 1 : 0),
-                    Staffing      = g.Sum(x => x.IsStaffing     == true ? 1 : 0),
-                    StartupJob    = g.Sum(x => x.IsStartupJob   == true ? 1 : 0),
-                    NonProfitJob  = g.Sum(x => x.IsNonProfitJob == true ? 1 : 0),
-                    UniversityJob = g.Sum(x => x.IsUniversityJob == true ? 1 : 0),
-                    Government    = g.Sum(x => x.CompanyType == "Government" ? 1 : 0),
-                    ContractToHire = g.Sum(x => x.IsContractToHire == true ? 1 : 0),
+                    H1BSponsored             = g.Sum(x => x.IsH1BSponsored            == true ? 1 : 0),
+                    Sponsored                = g.Sum(x => x.IsSponsored               == true ? 1 : 0),
+                    OptCpt                   = g.Sum(x => x.IsOptCpt                  == true ? 1 : 0),
+                    TnVisa                   = g.Sum(x => x.IsTnVisa                  == true ? 1 : 0),
+                    E3Visa                   = g.Sum(x => x.IsE3Visa                  == true ? 1 : 0),
+                    J1Visa                   = g.Sum(x => x.IsJ1Visa                  == true ? 1 : 0),
+                    GreenCard                = g.Sum(x => x.IsGreenCard               == true ? 1 : 0),
+                    W2                       = g.Sum(x => x.IsW2                      == true ? 1 : 0),
+                    C2C                      = g.Sum(x => x.IsC2C                     == true ? 1 : 0),
+                    ContractJob              = g.Sum(x => x.IsContractJob             == true ? 1 : 0),
+                    ContractToHire           = g.Sum(x => x.IsContractToHire          == true ? 1 : 0),
+                    FreelanceJob             = g.Sum(x => x.IsFreelanceJob            == true ? 1 : 0),
+                    PrimeVendor              = g.Sum(x => x.IsPrimeVendor             == true ? 1 : 0),
+                    Staffing                 = g.Sum(x => x.IsStaffing                == true ? 1 : 0),
+                    StartupJob               = g.Sum(x => x.IsStartupJob              == true ? 1 : 0),
+                    NonProfitJob             = g.Sum(x => x.IsNonProfitJob            == true ? 1 : 0),
+                    UniversityJob            = g.Sum(x => x.IsUniversityJob           == true ? 1 : 0),
+                    Government               = g.Sum(x => x.CompanyType == "Government" ? 1 : 0),
+                    SecurityClearanceRequired = g.Sum(x => x.IsSecurityClearanceRequired == true ? 1 : 0),
+                    VeteransEligible         = g.Sum(x => x.IsVeteransEligible        == true ? 1 : 0),
                 },
                 WorkModes = new WorkModeCounts
                 {
