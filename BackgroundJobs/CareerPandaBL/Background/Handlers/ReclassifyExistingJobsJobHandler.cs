@@ -83,10 +83,12 @@ public class ReclassifyExistingJobsJobHandler : IJobHandler
                 {
                     try
                     {
-                        // Snapshot the 12 current flag values so we can tell whether anything changed.
+                        // Snapshot all current flag values so we can tell whether anything changed.
                         bool? oC2C = row.IsC2C, oC2H = row.IsContractToHire, o1099 = row.IsFreelanceJob, oW2 = row.IsW2,
                               oContract = row.IsContractJob, oPV = row.IsPrimeVendor, oStaff = row.IsStaffing,
                               oH1B = row.IsH1BSponsored, oSponsored = row.IsSponsored,
+                              oOptCpt = row.IsOptCpt, oTn = row.IsTnVisa, oE3 = row.IsE3Visa,
+                              oJ1 = row.IsJ1Visa, oGc = row.IsGreenCard,
                               oStartup = row.IsStartupJob, oNonProfit = row.IsNonProfitJob, oUni = row.IsUniversityJob;
 
                         JobClassifier.ApplyKeywordFlags(row, row.JobDescription, employmentType: row.ContractType, companyName: row.CompanyName);
@@ -96,8 +98,11 @@ public class ReclassifyExistingJobsJobHandler : IJobHandler
                             o1099      != row.IsFreelanceJob   || oW2       != row.IsW2 ||
                             oContract  != row.IsContractJob    || oPV       != row.IsPrimeVendor ||
                             oStaff     != row.IsStaffing       || oH1B      != row.IsH1BSponsored ||
-                            oSponsored != row.IsSponsored      || oStartup  != row.IsStartupJob ||
-                            oNonProfit != row.IsNonProfitJob   || oUni      != row.IsUniversityJob;
+                            oSponsored != row.IsSponsored      || oOptCpt   != row.IsOptCpt ||
+                            oTn        != row.IsTnVisa         || oE3       != row.IsE3Visa ||
+                            oJ1        != row.IsJ1Visa         || oGc       != row.IsGreenCard ||
+                            oStartup   != row.IsStartupJob     || oNonProfit != row.IsNonProfitJob ||
+                            oUni       != row.IsUniversityJob;
 
                         if (!changed) return;
 

@@ -285,8 +285,13 @@ public class GovernmentJobsJobHandler : JobFetchBaseHandler
             CompanyName       = companyName,
             CompanyType       = "Government",
             // ── Flags ──────────────────────────────────────────────────────────
-            // Federal jobs require US citizenship — H1B not applicable
+            // Federal jobs require US citizenship — no visa sponsorship of any kind
             IsH1BSponsored    = false,
+            IsOptCpt          = false,
+            IsTnVisa          = false,
+            IsE3Visa          = false,
+            IsJ1Visa          = false,
+            IsGreenCard       = false,
             IsSponsored       = false,
             // All federal employees are W2
             IsW2              = true,

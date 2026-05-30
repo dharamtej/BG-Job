@@ -271,7 +271,12 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
                                 "cannot sponsor", "no sponsorship", "sponsorship not available",
                                 "do not sponsor", "does not sponsor");
         var isH1B         = (h1bKeywordHit && !h1bNegation) ||
-                            (companyName != null && sponsors.Contains(companyName));
+                            (!h1bNegation && companyName != null && (sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName))));
+        var isOptCpt      = !h1bNegation && ContainsAny(fullText, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa      = !h1bNegation && ContainsAny(fullText, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa      = !h1bNegation && ContainsAny(fullText, "e-3", "e3 visa", "e-3 visa");
+        var isJ1Visa      = !h1bNegation && ContainsAny(fullText, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
+        var isGreenCard   = !h1bNegation && ContainsAny(fullText, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         // Contract / Freelance: driven by Jobicy's jobType[] field — most accurate signal available
         var isContract    = contractType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true;
@@ -324,7 +329,12 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             CompanyLogoUrl    = logoUrl,
             Skills            = skills,
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B || ContainsAny(fullText, "sponsor", "visa"),
+            IsOptCpt          = isOptCpt,
+            IsTnVisa          = isTnVisa,
+            IsE3Visa          = isE3Visa,
+            IsJ1Visa          = isJ1Visa,
+            IsGreenCard       = isGreenCard,
+            IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard || ContainsAny(fullText, "sponsor", "visa"),
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,

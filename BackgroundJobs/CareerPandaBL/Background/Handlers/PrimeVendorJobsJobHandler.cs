@@ -90,7 +90,17 @@ public class PrimeVendorJobsJobHandler : JobFetchBaseHandler
                             ContainsAny(employerName, "staffing", "consulting", "solutions", "systems inc");
         var isW2          = ContainsAny(desc, "w2", "w-2");
         var is1099        = ContainsAny(desc, "1099", "independent contractor");
-        var isH1B         = ContainsAny(desc, "h1b", "h-1b", "visa sponsor");
+        var visaNegation  = ContainsAny(desc,
+            "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
+            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
+            "must be authorized to work", "must have work authorization",
+            "authorized to work in the us", "authorized to work in the united states");
+        var isH1B         = !visaNegation && ContainsAny(desc, "h1b", "h-1b", "visa sponsor", "will sponsor", "sponsorship available");
+        var isOptCpt      = !visaNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa      = !visaNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa      = !visaNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
+        var isJ1Visa      = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
+        var isGreenCard   = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         decimal? salMin = null, salMax = null;
         if (j.TryGetProperty("job_min_salary", out var sn) && sn.ValueKind == JsonValueKind.Number) salMin = sn.GetDecimal();
@@ -135,7 +145,12 @@ public class PrimeVendorJobsJobHandler : JobFetchBaseHandler
             IsContractJob   = true,
             IsStaffing      = isStaffing,
             IsH1BSponsored  = isH1B,
-            IsSponsored     = isH1B,
+            IsOptCpt        = isOptCpt,
+            IsTnVisa        = isTnVisa,
+            IsE3Visa        = isE3Visa,
+            IsJ1Visa        = isJ1Visa,
+            IsGreenCard     = isGreenCard,
+            IsSponsored     = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
             Status          = true,
             CreatedOn       = DateTime.UtcNow,
             UpdatedOn       = DateTime.UtcNow

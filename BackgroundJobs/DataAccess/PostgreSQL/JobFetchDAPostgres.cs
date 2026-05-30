@@ -281,6 +281,11 @@ public class JobFetchDAPostgres : IJobFetchDA
             .SetProperty(j => j.IsStaffing,       job.IsStaffing)
             .SetProperty(j => j.IsH1BSponsored,   job.IsH1BSponsored)
             .SetProperty(j => j.IsSponsored,      job.IsSponsored)
+            .SetProperty(j => j.IsOptCpt,         job.IsOptCpt)
+            .SetProperty(j => j.IsTnVisa,         job.IsTnVisa)
+            .SetProperty(j => j.IsE3Visa,         job.IsE3Visa)
+            .SetProperty(j => j.IsJ1Visa,         job.IsJ1Visa)
+            .SetProperty(j => j.IsGreenCard,      job.IsGreenCard)
             .SetProperty(j => j.IsStartupJob,     job.IsStartupJob)
             .SetProperty(j => j.IsNonProfitJob,   job.IsNonProfitJob)
             .SetProperty(j => j.IsUniversityJob,  job.IsUniversityJob)
@@ -605,8 +610,8 @@ public class JobFetchDAPostgres : IJobFetchDA
                     job.OurCompanyId = companyId;
 
                     // Single chokepoint that tags C2C / C2H / 1099 / W2 / Contract / PrimeVendor / Staffing /
-                    // H1B / Sponsored / Startup / NonProfit / University from the job description + company name.
-                    // Preserves any flag the handler already set to true.
+                    // H1B / OPT-CPT / TN / E-3 / J-1 / GreenCard / Sponsored / Startup / NonProfit / University
+                    // from the job description + company name. Preserves any flag the handler already set to true.
                     CareerPanda.DataAccess.Util.JobClassifier.ApplyKeywordFlags(job, job.JobDescription, employmentType: job.ContractType, companyName: job.CompanyName);
 
                     ApiRawJob? existing = null;
@@ -725,6 +730,11 @@ public class JobFetchDAPostgres : IJobFetchDA
         dest.IsStaffing        = src.IsStaffing;
         dest.IsSponsored       = src.IsSponsored;
         dest.IsH1BSponsored    = src.IsH1BSponsored;
+        dest.IsOptCpt          = src.IsOptCpt;
+        dest.IsTnVisa          = src.IsTnVisa;
+        dest.IsE3Visa          = src.IsE3Visa;
+        dest.IsJ1Visa          = src.IsJ1Visa;
+        dest.IsGreenCard       = src.IsGreenCard;
         dest.IsUniversityJob   = src.IsUniversityJob;
         dest.IsStartupJob      = src.IsStartupJob;
         dest.IsNonProfitJob    = src.IsNonProfitJob;

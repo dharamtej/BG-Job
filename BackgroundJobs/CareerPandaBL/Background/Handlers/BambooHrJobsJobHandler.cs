@@ -359,6 +359,11 @@ public class BambooHrJobsJobHandler : IJobHandler
             CompanyUrl      = token.BoardUrl,
             CompanyType     = "Private",
             IsH1BSponsored  = isH1B,
+            IsOptCpt        = false,   // BambooHR list endpoint has no description — JobClassifier fills on upsert
+            IsTnVisa        = false,
+            IsE3Visa        = false,
+            IsJ1Visa        = false,
+            IsGreenCard     = false,
             IsSponsored     = isH1B,
             IsW2            = null,
             IsC2C           = false,

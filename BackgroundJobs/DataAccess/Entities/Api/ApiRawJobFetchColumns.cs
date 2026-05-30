@@ -112,4 +112,25 @@ public partial class ApiRawJob
     /// <summary>Contract-to-Hire — converts to FTE after a contract period.</summary>
     [Column("is_contract_to_hire")]
     public bool? IsContractToHire { get; set; }
+
+    // ── Visa classification flags ────────────────────────────────────────────
+    /// <summary>OPT / CPT — F-1 student work authorization.</summary>
+    [Column("is_opt_cpt")]
+    public bool? IsOptCpt { get; set; }
+
+    /// <summary>TN Visa — Canadian / Mexican professionals under USMCA.</summary>
+    [Column("is_tn_visa")]
+    public bool? IsTnVisa { get; set; }
+
+    /// <summary>E-3 Visa — Australian specialty occupation workers.</summary>
+    [Column("is_e3_visa")]
+    public bool? IsE3Visa { get; set; }
+
+    /// <summary>J-1 Visa — Exchange visitors / cultural exchange programs.</summary>
+    [Column("is_j1_visa")]
+    public bool? IsJ1Visa { get; set; }
+
+    /// <summary>Green Card / Permanent Residency sponsorship (PERM / EB-2 / EB-3).</summary>
+    [Column("is_green_card")]
+    public bool? IsGreenCard { get; set; }
 }

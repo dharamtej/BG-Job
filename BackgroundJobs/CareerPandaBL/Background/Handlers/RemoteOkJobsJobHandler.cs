@@ -333,7 +333,12 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
                                 "cannot sponsor", "no sponsorship", "sponsorship not available",
                                 "do not sponsor", "does not sponsor");
         var isH1B         = (h1bKeywordHit && !h1bNegation) ||
-                            (companyName != null && sponsors.Contains(companyName));
+                            (companyName != null && (sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName))));
+        var isOptCpt      = !h1bNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa      = !h1bNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa      = !h1bNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
+        var isJ1Visa      = !h1bNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
+        var isGreenCard   = !h1bNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         // Contract: specific job-context phrases; plain "contract" too broad
         var isContract    = ContainsAny(desc, "contract position", "contract role", "contract to hire",
@@ -390,7 +395,12 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             Skills            = tags,
             // ── All flags ─────────────────────────────────────────────────────
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B,
+            IsOptCpt          = isOptCpt,
+            IsTnVisa          = isTnVisa,
+            IsE3Visa          = isE3Visa,
+            IsJ1Visa          = isJ1Visa,
+            IsGreenCard       = isGreenCard,
+            IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,

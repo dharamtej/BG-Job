@@ -70,6 +70,11 @@ public class ContractJobsJobHandler : JobFetchBaseHandler
         var desc     = j.TryGetProperty("job_description",    out var d)   ? d.GetString()   : null;
         var isRemote = j.TryGetProperty("job_is_remote",      out var rem) && rem.GetBoolean();
 
+        var visaNegation = ContainsAny(desc,
+            "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
+            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
+            "must be authorized to work", "must have work authorization",
+            "authorized to work in the us", "authorized to work in the united states");
         var isC2C  = ContainsAny(desc, "c2c", "corp to corp", "corp-to-corp");
         var isW2   = ContainsAny(desc, "w2", "w-2");
         var is1099 = ContainsAny(desc, "1099", "independent contractor");
@@ -114,8 +119,14 @@ public class ContractJobsJobHandler : JobFetchBaseHandler
             IsC2C           = isC2C,
             IsW2            = isW2,
             IsFreelanceJob  = is1099,
-            IsH1BSponsored  = ContainsAny(desc, "h1b", "h-1b", "visa sponsor"),
-            IsSponsored     = ContainsAny(desc, "sponsor", "visa"),
+            IsH1BSponsored  = !visaNegation && ContainsAny(desc, "h1b", "h-1b", "visa sponsor", "will sponsor", "sponsorship available"),
+            IsOptCpt        = !visaNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt "),
+            IsTnVisa        = !visaNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa"),
+            IsE3Visa        = !visaNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa"),
+            IsJ1Visa        = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor"),
+            IsGreenCard     = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification"),
+            IsSponsored     = !visaNegation && ContainsAny(desc, "h1b", "h-1b", "visa sponsor", "will sponsor", "sponsorship available",
+                                  " opt ", "opt/cpt", "stem opt", "tn visa", "e-3", "j-1", "green card", "perm filing"),
             Status          = true,
             CreatedOn       = DateTime.UtcNow,
             UpdatedOn       = DateTime.UtcNow

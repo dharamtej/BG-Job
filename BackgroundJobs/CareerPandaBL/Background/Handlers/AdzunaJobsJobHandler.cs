@@ -274,8 +274,19 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
                             ContainsAny(companyName, "startup", "start-up");
         var isNonProfit   = ContainsAny(desc, "nonprofit", "non-profit", "501(c)", "501c3", "ngo", "not for profit") ||
                             ContainsAny(companyName, "foundation", "nonprofit", "non-profit");
-        var isH1B         = ContainsAny(desc, "h1b", "h-1b", "h1-b", "visa sponsor", "will sponsor", "sponsorship available") ||
-                            (companyName != null && sponsors.Contains(companyName));
+        var visaNegation  = ContainsAny(desc,
+            "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
+            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
+            "must be authorized to work", "must have work authorization",
+            "authorized to work in the us", "authorized to work in the united states");
+        var isH1B         = !visaNegation && (
+                            ContainsAny(desc, "h1b", "h-1b", "h1-b", "visa sponsor", "will sponsor", "sponsorship available") ||
+                            (companyName != null && (sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName)))));
+        var isOptCpt      = !visaNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa      = !visaNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa      = !visaNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
+        var isJ1Visa      = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
+        var isGreenCard   = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         return new ApiRawJob
         {
@@ -300,7 +311,12 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             Industry          = category,
             // ── All flags evaluated at insert time ────────────────────────────
             IsH1BSponsored    = isH1B,
-            IsSponsored       = isH1B || ContainsAny(desc, "sponsor", "visa"),
+            IsOptCpt          = isOptCpt,
+            IsTnVisa          = isTnVisa,
+            IsE3Visa          = isE3Visa,
+            IsJ1Visa          = isJ1Visa,
+            IsGreenCard       = isGreenCard,
+            IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard || ContainsAny(desc, "sponsor", "visa"),
             IsContractJob     = isContract,
             IsC2C             = isC2C,
             IsW2              = isW2,

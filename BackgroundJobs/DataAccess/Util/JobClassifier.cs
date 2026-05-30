@@ -23,7 +23,8 @@ public static class JobClassifier
         // Suppresses sponsor keyword matches when the posting explicitly disclaims sponsorship.
         var hasNegation = Has(d,
             "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
-            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b", "must be authorized to work");
+            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b", "must be authorized to work",
+            "no green card", "no gc sponsor", "no opt", "no cpt", "no tn", "no j-1", "no e-3");
 
         // ── C2C
         if (job.IsC2C != true && Has(d,
@@ -72,18 +73,52 @@ public static class JobClassifier
             Has(n, "staffing", "consulting", "solutions", "talent partners", "resources", "infotech")))
             job.IsStaffing = true;
 
-        // ── H1B sponsorship — explicit phrases, with negation guard
+        // ── H-1B sponsorship — explicit phrases, with negation guard
         if (!hasNegation && job.IsH1BSponsored != true && Has(d,
             "h1b", "h-1b", "h1-b", "h1b sponsor", "h-1b sponsor",
             "visa sponsor", "willing to sponsor", "will sponsor",
-            "sponsorship available", "open to sponsorship",
-            "stem opt", "opt/cpt", "tn visa"))
+            "sponsorship available", "open to sponsorship"))
             job.IsH1BSponsored = true;
 
-        // ── Sponsored (broader visa-friendly)
+        // ── OPT / CPT (F-1 students)
+        if (!hasNegation && job.IsOptCpt != true && Has(d,
+            " opt ", "opt/cpt", "opt / cpt", "stem opt", "opt extension",
+            "f-1 visa", "f1 visa", " cpt ", "optional practical training",
+            "curricular practical training"))
+            job.IsOptCpt = true;
+
+        // ── TN Visa (Canada / Mexico professionals under USMCA)
+        if (!hasNegation && job.IsTnVisa != true && Has(d,
+            "tn visa", "tn-1", "tn-2", "nafta visa", "usmca", "trade nafta",
+            "tn status", "tn work authorization"))
+            job.IsTnVisa = true;
+
+        // ── E-3 Visa (Australian specialty occupation)
+        if (!hasNegation && job.IsE3Visa != true && Has(d,
+            "e-3", "e3 visa", "e-3 visa", "australian visa",
+            "australian specialty occupation"))
+            job.IsE3Visa = true;
+
+        // ── J-1 Visa (Exchange visitors)
+        if (!hasNegation && job.IsJ1Visa != true && Has(d,
+            "j-1", "j1 visa", "j-1 visa", "exchange visitor",
+            "exchange program visa", "cultural exchange visa"))
+            job.IsJ1Visa = true;
+
+        // ── Green Card / Permanent Residency sponsorship
+        if (!hasNegation && job.IsGreenCard != true && Has(d,
+            "green card", "gc sponsor", "perm filing", "permanent resident",
+            "employment-based green card", "employment based green card",
+            "eb-2", "eb-3", "eb2", "eb3", "labor certification", "perm labor",
+            "permanent residency sponsor", "green card sponsor"))
+            job.IsGreenCard = true;
+
+        // ── Sponsored (broader: any visa-friendly signal across all types)
         if (!hasNegation && job.IsSponsored != true && (
-            job.IsH1BSponsored == true ||
-            Has(d, "visa sponsorship", "opt extension", " opt ", " cpt ", " ead ")))
+            job.IsH1BSponsored == true || job.IsOptCpt    == true ||
+            job.IsTnVisa       == true || job.IsE3Visa    == true ||
+            job.IsJ1Visa       == true || job.IsGreenCard == true ||
+            Has(d, "visa sponsorship", " ead ")))
             job.IsSponsored = true;
 
         // ── Startup

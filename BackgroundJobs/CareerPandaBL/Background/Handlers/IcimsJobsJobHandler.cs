@@ -376,10 +376,20 @@ public partial class IcimsJobsJobHandler : IJobHandler
         if (d.TryGetProperty("description", out var de) && de.ValueKind == JsonValueKind.String)
             desc = de.GetString();
 
-        var isH1BFinal = isH1B ||
+        var visaNegation = ContainsAny(desc,
+            "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
+            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
+            "must be authorized to work", "must have work authorization",
+            "authorized to work in the us", "authorized to work in the united states");
+        var isH1BFinal  = !visaNegation && (isH1B ||
             (desc != null && (desc.Contains("h1b", StringComparison.OrdinalIgnoreCase) ||
                               desc.Contains("h-1b", StringComparison.OrdinalIgnoreCase) ||
-                              desc.Contains("visa sponsor", StringComparison.OrdinalIgnoreCase)));
+                              desc.Contains("visa sponsor", StringComparison.OrdinalIgnoreCase))));
+        var isOptCpt    = !visaNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa    = !visaNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa    = !visaNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
+        var isJ1Visa    = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
+        var isGreenCard = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         // ── Salary (rare on iCIMS JSON-LD, but parse if present) ─────────────
         decimal? salMin = null, salMax = null;
@@ -443,7 +453,12 @@ public partial class IcimsJobsJobHandler : IJobHandler
             CompanyUrl      = token.BoardUrl,
             CompanyType     = "Private",
             IsH1BSponsored  = isH1BFinal,
-            IsSponsored     = isH1BFinal,
+            IsOptCpt        = isOptCpt,
+            IsTnVisa        = isTnVisa,
+            IsE3Visa        = isE3Visa,
+            IsJ1Visa        = isJ1Visa,
+            IsGreenCard     = isGreenCard,
+            IsSponsored     = isH1BFinal || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
             IsW2            = null,
             IsC2C           = false,
             IsContractJob   = isContract,
