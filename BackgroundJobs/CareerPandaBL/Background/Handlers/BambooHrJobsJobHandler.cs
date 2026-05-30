@@ -205,12 +205,15 @@ public class BambooHrJobsJobHandler : IJobHandler
 
         if (!resp.IsSuccessStatusCode)
         {
-            _logger.LogWarning("[BambooHR] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
+            var sc = resp.StatusCode;
+            if (sc is HttpStatusCode.Forbidden or HttpStatusCode.NotFound
+                    or HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+                _logger.LogDebug("[BambooHR] {Status} fetching {Token}", (int)sc, token.BoardToken);
+            else
+                _logger.LogWarning("[BambooHR] {Status} fetching {Token}", (int)sc, token.BoardToken);
 
-            if (resp.StatusCode is HttpStatusCode.NotFound
-                                or HttpStatusCode.Forbidden
-                                or HttpStatusCode.Unauthorized
-                                or HttpStatusCode.BadRequest)
+            if (sc is HttpStatusCode.NotFound or HttpStatusCode.Forbidden
+                    or HttpStatusCode.Unauthorized or HttpStatusCode.BadRequest)
                 return ([], httpCode, "INVALID", 0);
 
             return ([], httpCode, null, 0);

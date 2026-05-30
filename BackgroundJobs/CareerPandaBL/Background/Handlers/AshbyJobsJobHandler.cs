@@ -209,10 +209,15 @@ public partial class AshbyJobsJobHandler : IJobHandler
 
         if (!resp.IsSuccessStatusCode)
         {
-            _logger.LogWarning("[Ashby] {Status} fetching {Token}", (int)resp.StatusCode, token.BoardToken);
+            var sc = resp.StatusCode;
+            if (sc is HttpStatusCode.Forbidden or HttpStatusCode.NotFound
+                    or HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+                _logger.LogDebug("[Ashby] {Status} fetching {Token}", (int)sc, token.BoardToken);
+            else
+                _logger.LogWarning("[Ashby] {Status} fetching {Token}", (int)sc, token.BoardToken);
 
             // 404 / 400 = board genuinely doesn't exist → permanent INVALID.
-            if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
+            if (sc is HttpStatusCode.NotFound or HttpStatusCode.BadRequest)
                 return ([], httpCode, "INVALID", 0);
 
             // 401/403/5xx/429 → transient. Leave status unchanged for retry.

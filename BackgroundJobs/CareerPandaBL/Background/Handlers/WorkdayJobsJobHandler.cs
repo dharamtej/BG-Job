@@ -226,7 +226,11 @@ public class WorkdayJobsJobHandler : IJobHandler
 
             if (!resp.IsSuccessStatusCode)
             {
-                _logger.LogWarning("[Workday] {Status} for {Slug}/{Site}", (int)resp.StatusCode, token.CompanySlug, token.SiteId);
+                if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound
+                        or HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+                    _logger.LogDebug("[Workday] {Status} for {Slug}/{Site}", (int)resp.StatusCode, token.CompanySlug, token.SiteId);
+                else
+                    _logger.LogWarning("[Workday] {Status} for {Slug}/{Site}", (int)resp.StatusCode, token.CompanySlug, token.SiteId);
 
                 // 404 = site genuinely doesn't exist → permanent INVALID.
                 if (resp.StatusCode == HttpStatusCode.NotFound)

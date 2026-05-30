@@ -223,11 +223,20 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
 
         if (!listResp.IsSuccessStatusCode)
         {
-            _logger.LogWarning("[Greenhouse] {Status} fetching job list for {Token}",
-                (int)listResp.StatusCode, token.BoardToken);
+            // 403/404/429 are expected for stale or rate-limited tokens — log at Debug to avoid
+            // flooding Railway's 500 logs/sec cap when hundreds of invalid boards run in parallel.
+            var sc = listResp.StatusCode;
+            if (sc is System.Net.HttpStatusCode.Forbidden
+                    or System.Net.HttpStatusCode.NotFound
+                    or System.Net.HttpStatusCode.TooManyRequests)
+                _logger.LogDebug("[Greenhouse] {Status} fetching job list for {Token}",
+                    (int)sc, token.BoardToken);
+            else
+                _logger.LogWarning("[Greenhouse] {Status} fetching job list for {Token}",
+                    (int)sc, token.BoardToken);
 
             // Definitive failure — board genuinely doesn't exist.
-            if (listResp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            if (sc == System.Net.HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
 
             // 401/403 used to be marked INVALID forever, but they're frequently caused by
