@@ -181,6 +181,7 @@ builder.Services.AddSingleton<IJobHandler, RecruiteeJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, H1BSponsorEnrichmentJobHandler>();
 builder.Services.AddSingleton<IJobHandler, CompanyEnrichmentJobHandler>();
 builder.Services.AddSingleton<IJobHandler, ReclassifyExistingJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, NormalizeJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>();              // Meta: runs all fetch handlers sequentially
 builder.Services.AddHostedService<BackgroundJobWorker>();
 

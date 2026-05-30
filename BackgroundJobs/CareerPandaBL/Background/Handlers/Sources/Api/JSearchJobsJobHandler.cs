@@ -259,7 +259,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
         var jobs = new List<ApiRawJob>();
         foreach (var item in data.EnumerateArray())
         {
-            try { jobs.Add(MapJob(item, fetchRunId, sponsors)); }
+            try { jobs.Add(MapJob(item, fetchRunId, sponsors, roleQuery)); }
             catch (Exception ex) { Logger.LogWarning(ex, "[JSearch] Map failed for item"); }
         }
         return jobs;
@@ -267,7 +267,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
 
     // ── MapJob ────────────────────────────────────────────────────────────────
 
-    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)
+    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors, string roleQuery = "")
     {
         var postDate     = ParsePostDate(j.TryGetProperty("job_posted_at_datetime_utc", out var pd)  ? pd.GetString()   : null);
         var desc         = j.TryGetProperty("job_description",     out var d)   ? d.GetString()   : null;
@@ -355,6 +355,9 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
             CompanyLogoUrl    = j.TryGetProperty("employer_logo",         out var logo) ? logo.GetString() : null,
             CompanyUrl        = j.TryGetProperty("employer_website",      out var cw)   ? cw.GetString()   : null,
             CompanyType       = j.TryGetProperty("employer_company_type", out var ctp)  ? ctp.GetString()  : null,
+            // roleQuery comes from md.job_roles.search_query which has an industry_id —
+            // store it as raw Industry text so the NormalizeJobs handler can alias-match it.
+            Industry          = roleQuery,
             Skills            = skills,
             Requirements      = requirements,
             IsH1BSponsored    = isH1B,

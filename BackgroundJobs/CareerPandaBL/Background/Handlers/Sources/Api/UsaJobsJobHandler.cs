@@ -4,9 +4,10 @@
 // SIGNUP : https://developer.usajobs.gov/  (free, instant approval)
 // DOCS   : https://developer.usajobs.gov/APIRequest/Index
 //
-// SWEEPS (both run inside one ExecuteAsync / one fetch-run row)
-//   1. Government — no keyword, DatePosted=120, full HiringPath + clearance parsing  (was GovernmentJobsJobHandler)
-//   2. University — keyword="university", forces IsUniversityJob=true               (was UniversityJobsJobHandler)
+// SWEEPS (run inside one ExecuteAsync / one fetch-run row)
+//   1. Government — no keyword, full HiringPath + clearance parsing
+//   2. University — keyword="university", forces IsUniversityJob=true
+//   3. Role queries — each active md.job_roles.search_query as Keyword filter
 //
 // All US federal jobs: W2, no visa sponsorship, citizenship required.
 // USAJobs SASE gateway blocks rapid bursts — 3s inter-page delay.
@@ -53,7 +54,7 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
         _userAgent = configuration["JobApiSettings:UsaJobsUserAgent"] ?? "CareerPanda";
     }
 
-    // ── Override: 2-sweep execution ──────────────────────────────────────────
+    // ── Override: multi-sweep execution ──────────────────────────────────────
 
     public override async Task ExecuteAsync(
         JobWorkRequest request,
@@ -65,6 +66,13 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
         using var scope = _scopeFactory.CreateScope();
         var fetchDa = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
+        // Build full sweep list: fixed sweeps + one per active job role query
+        var roleQueries = await fetchDa.GetActiveJobRoleQueriesAsync(cancellationToken);
+        var allSweeps = Sweeps
+            .Select(s => (s.Keyword, s.ForceUniversity, s.Tag))
+            .Concat(roleQueries.Select(q => ((string?)q, false, q)))
+            .ToList();
+
         var run = new ApiJobFetchRun
         {
             Id               = request.JobId,
@@ -74,21 +82,25 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
             Status           = "Running",
             StartedAt        = DateTime.UtcNow,
             HoursBack        = input.HoursBack,
-            MaxPages         = Sweeps.Length * input.MaxPages,
+            MaxPages         = allSweeps.Count * input.MaxPages,
             LocationFilter   = "United States (USAJobs.gov)",
             CreatedById      = request.UserId
         };
         await fetchDa.CreateFetchRunAsync(run);
+
+        Logger.LogInformation("[USAJobs] Starting — {Fixed} fixed sweeps + {Roles} role queries = {Total} total sweeps",
+            Sweeps.Length, roleQueries.Count, allSweeps.Count);
 
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0,
             totalSkipped = 0, totalErrors = 0, pagesFetched = 0, sweepIndex = 0;
 
         try
         {
-            foreach (var (keyword, forceUniversity, tag) in Sweeps)
+            foreach (var (keyword, forceUniversity, tag) in allSweeps)
             {
                 if (cancellationToken.IsCancellationRequested) break;
-                Logger.LogInformation("[USAJobs] Sweep {T} (keyword='{K}')", tag, keyword ?? "(none)");
+                Logger.LogInformation("[USAJobs] [{I}/{T}] Sweep '{Tag}' (keyword='{K}')",
+                    sweepIndex + 1, allSweeps.Count, tag, keyword ?? "(none)");
 
                 for (int page = 1; page <= input.MaxPages; page++)
                 {
@@ -108,9 +120,9 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
 
                     await fetchDa.UpdateFetchRunStatsAsync(run.Id, totalFetched, totalInserted, totalUpdated, totalSkipped, totalErrors, pagesFetched);
 
-                    int pct = (int)(((sweepIndex * input.MaxPages + page) / (double)(Sweeps.Length * input.MaxPages)) * 90);
+                    int pct = (int)(((sweepIndex * input.MaxPages + page) / (double)(allSweeps.Count * input.MaxPages)) * 90);
                     await progress.ReportProgressAsync(pct,
-                        $"[{tag} p{page}] Inserted:{totalInserted} Updated:{totalUpdated}");
+                        $"[{sweepIndex + 1}/{allSweeps.Count}] {tag} p{page} — Inserted:{totalInserted} Updated:{totalUpdated}");
                     await Task.Delay(InterPageDelayMs, cancellationToken);
                 }
                 sweepIndex++;

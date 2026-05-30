@@ -44,6 +44,8 @@ public class RunAllJobsJobHandler : IJobHandler
         "ArbeitnowJobs",      // Arbeitnow — US+remote filter applied
         // ── Post-processing — runs after every fetch refreshes classification flags
         "ReclassifyExisting",
+        // Links industry_id + job_role_id via alias maps — must run after Reclassify
+        "NormalizeJobs",
         // H1BSponsorEnrichment and CompanyEnrichment stay manual-only.
     ];
 

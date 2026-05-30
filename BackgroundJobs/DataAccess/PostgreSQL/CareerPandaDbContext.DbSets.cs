@@ -85,7 +85,9 @@ public partial class CareerPandaDbContext
     public DbSet<MdFeatureTypes> FeatureTypes { get; set; } = null!;
     public DbSet<MdFieldOfStudy> FieldOfStudy { get; set; } = null!;
     public DbSet<MdIndustry> Industries { get; set; } = null!;
+    public DbSet<MdIndustryAlias> IndustryAliases { get; set; } = null!;
     public DbSet<MdJobRole> JobRoles { get; set; } = null!;
+    public DbSet<MdJobRoleAlias> JobRoleAliases { get; set; } = null!;
     public DbSet<MdRoleConfiguration> RoleConfigurations { get; set; } = null!;
     public DbSet<MdRole> Roles { get; set; } = null!;
     public DbSet<MdServiceCategory> ServiceCategories { get; set; } = null!;

@@ -109,4 +109,34 @@ public interface IJobFetchDA
     Task<(int inserted, int updated, int errors)> BulkUpsertRawJobsAsync(
         IEnumerable<ApiRawJob> jobs,
         CancellationToken cancellationToken);
+
+    // ── Normalization ───────────────────────────────────────────────────────
+    /// <summary>Page through raw_jobs that need industry/role normalization.</summary>
+    Task<List<ApiRawJob>> GetRawJobsForNormalizationAsync(int afterId, int batchSize, CancellationToken ct = default);
+
+    /// <summary>Returns alias→industry_id map for all seeded/learned aliases.</summary>
+    Task<Dictionary<string, int>> GetIndustryAliasMapAsync(CancellationToken ct = default);
+
+    /// <summary>Returns alias→job_role_id map for all seeded/learned aliases.</summary>
+    Task<Dictionary<string, int>> GetJobRoleAliasMapAsync(CancellationToken ct = default);
+
+    /// <summary>Set industry_id, job_role_id and norm_status on one raw_job row.</summary>
+    Task UpdateJobNormalizationAsync(int jobId, int? industryId, int? jobRoleId, string normStatus, CancellationToken ct = default);
+
+    /// <summary>Insert a new industry alias (lowercased, trimmed) if it does not already exist.</summary>
+    Task TryAddIndustryAliasAsync(string alias, int industryId, string? source, CancellationToken ct = default);
+
+    /// <summary>Insert a new job-role alias (lowercased, trimmed) if it does not already exist.</summary>
+    Task TryAddJobRoleAliasAsync(string alias, int jobRoleId, string? source, CancellationToken ct = default);
+
+    // ── Reference data (portal dropdowns) ──────────────────────────────────
+    /// <summary>All active industries ordered by name.</summary>
+    Task<List<IndustryDto>> GetActiveIndustriesAsync(CancellationToken ct = default);
+
+    /// <summary>All active job roles, optionally filtered by industryId.</summary>
+    Task<List<JobRoleDto>> GetActiveJobRolesAsync(int? industryId = null, CancellationToken ct = default);
+
+    // ── Portal job search ───────────────────────────────────────────────────
+    Task<(List<RawJobSearchResult> Items, int Total)> SearchRawJobsAsync(
+        RawJobSearchQuery query, CancellationToken ct = default);
 }

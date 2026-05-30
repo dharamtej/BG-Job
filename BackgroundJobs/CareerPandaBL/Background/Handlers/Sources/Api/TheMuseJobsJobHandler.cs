@@ -3,9 +3,10 @@
 // API KEY: JobApiSettings:MuseApiKey  (optional — leave empty for free tier)
 // DOCS   : https://www.themuse.com/developers/api/v2
 //
-// SWEEPS (both run inside one ExecuteAsync / one fetch-run row)
-//   1. Startup   — company_size=Startup,Small  → IsStartupJob = true   (was StartupJobsJobHandler)
-//   2. NonProfit — company_size=Non-Profit     → IsNonProfitJob = true  (was NonProfitJobsJobHandler)
+// SWEEPS (run inside one ExecuteAsync / one fetch-run row)
+//   1. Startup   — company_size=Startup,Small  → IsStartupJob = true
+//   2. NonProfit — company_size=Non-Profit     → IsNonProfitJob = true
+//   3. Category sweep — each TheMuse category × no company_size filter (broad coverage)
 //
 // US filter: jobs whose location string doesn't resolve to US or Remote are dropped.
 // All other classification flags set at upsert time by JobClassifier.
@@ -33,6 +34,40 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
         ("Non-Profit",    false, true,  "NonProfit"),
     ];
 
+    // TheMuse's own category names — these are the exact strings the API accepts as &category=
+    // Sweeping all categories covers the full job board beyond just startups/nonprofits.
+    private static readonly string[] MuseCategories =
+    [
+        "Tech",
+        "Engineering",
+        "Data & Analytics",
+        "Product & UX",
+        "Design & UX",
+        "Dev & IT",
+        "Business & Strategy",
+        "Project & Program Management",
+        "Operations",
+        "Finance",
+        "Accounting",
+        "Sales",
+        "Marketing & PR",
+        "Customer Service",
+        "HR & Recruiting",
+        "Legal",
+        "Healthcare",
+        "Science",
+        "Education",
+        "Content & Writing",
+        "Media & Journalism",
+        "Social Impact",
+        "Non-Profit Management",
+        "Social Media & Community",
+        "Administrative",
+        "Real Estate",
+        "Retail",
+        "Hospitality",
+    ];
+
     private readonly IHttpClientFactory _http;
     private readonly string? _apiKey;
 
@@ -48,7 +83,7 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
         _apiKey = configuration["JobApiSettings:MuseApiKey"];
     }
 
-    // ── Override: 2-sweep execution ──────────────────────────────────────────
+    // ── Override: company-size sweeps + category sweeps ─────────────────────
 
     public override async Task ExecuteAsync(
         JobWorkRequest request,
@@ -61,6 +96,13 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
         using var scope = _scopeFactory.CreateScope();
         var fetchDa = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
 
+        // If a specific SearchQuery was passed (manual run), only fetch that category
+        var categories = string.IsNullOrWhiteSpace(input.SearchQuery)
+            ? MuseCategories
+            : [input.SearchQuery];
+
+        int totalSweeps = Sweeps.Length + categories.Length;
+
         var run = new DataAccess.Entities.Api.ApiJobFetchRun
         {
             Id               = request.JobId,
@@ -70,21 +112,26 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
             Status           = "Running",
             StartedAt        = DateTime.UtcNow,
             HoursBack        = input.HoursBack,
-            MaxPages         = Sweeps.Length * input.MaxPages,
-            LocationFilter   = "US (company_size filter)",
+            MaxPages         = totalSweeps * input.MaxPages,
+            LocationFilter   = "US (company_size + category sweeps)",
             CreatedById      = request.UserId
         };
         await fetchDa.CreateFetchRunAsync(run);
+
+        Logger.LogInformation("[TheMuse] Starting — {CS} company-size sweeps + {Cat} category sweeps = {Total} total",
+            Sweeps.Length, categories.Length, totalSweeps);
 
         int totalFetched = 0, totalInserted = 0, totalUpdated = 0,
             totalSkipped = 0, totalErrors = 0, pagesFetched = 0, sweepIndex = 0;
 
         try
         {
+            // ── Phase 1: company-size sweeps (Startup + NonProfit) ────────────
             foreach (var (companySize, isStartup, isNonProfit, tag) in Sweeps)
             {
                 if (cancellationToken.IsCancellationRequested) break;
-                Logger.LogInformation("[TheMuse] Sweep {T} (company_size={C})", tag, companySize);
+                Logger.LogInformation("[TheMuse] [{I}/{T}] company_size sweep '{Tag}'",
+                    sweepIndex + 1, totalSweeps, tag);
 
                 for (int page = 1; page <= input.MaxPages; page++)
                 {
@@ -95,7 +142,7 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { Logger.LogError(ex, "[TheMuse] {T} page {P} failed", tag, page); totalErrors++; continue; }
 
-                    if (jobs.Count == 0) { Logger.LogInformation("[TheMuse] {T} — no more results at page {P}", tag, page); break; }
+                    if (jobs.Count == 0) break;
 
                     pagesFetched++; totalFetched += jobs.Count;
                     (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
@@ -103,10 +150,39 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
                     totalSkipped  += jobs.Count - ins - upd - err;
 
                     await fetchDa.UpdateFetchRunStatsAsync(run.Id, totalFetched, totalInserted, totalUpdated, totalSkipped, totalErrors, pagesFetched);
+                    int pct = (int)(((sweepIndex * input.MaxPages + page) / (double)(totalSweeps * input.MaxPages)) * 90);
+                    await progress.ReportProgressAsync(pct, $"[{sweepIndex + 1}/{totalSweeps}] {tag} p{page} — Ins:{totalInserted}");
+                    await Task.Delay(InterPageDelayMs, cancellationToken);
+                }
+                sweepIndex++;
+            }
 
-                    int pct = (int)(((sweepIndex * input.MaxPages + page) / (double)(Sweeps.Length * input.MaxPages)) * 90);
-                    await progress.ReportProgressAsync(pct,
-                        $"[{tag} p{page}] Inserted:{totalInserted} Updated:{totalUpdated}");
+            // ── Phase 2: category sweeps (all MuseCategories) ─────────────────
+            foreach (var category in categories)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+                Logger.LogInformation("[TheMuse] [{I}/{T}] category sweep '{Cat}'",
+                    sweepIndex + 1, totalSweeps, category);
+
+                for (int page = 1; page <= input.MaxPages; page++)
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    List<ApiRawJob> jobs;
+                    try { jobs = await FetchMuseCategoryPageAsync(page, input, category, run.Id, sponsors, cancellationToken); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { Logger.LogError(ex, "[TheMuse] category '{Cat}' page {P} failed", category, page); totalErrors++; continue; }
+
+                    if (jobs.Count == 0) break;
+
+                    pagesFetched++; totalFetched += jobs.Count;
+                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    totalInserted += ins; totalUpdated += upd; totalErrors += err;
+                    totalSkipped  += jobs.Count - ins - upd - err;
+
+                    await fetchDa.UpdateFetchRunStatsAsync(run.Id, totalFetched, totalInserted, totalUpdated, totalSkipped, totalErrors, pagesFetched);
+                    int pct = (int)(((sweepIndex * input.MaxPages + page) / (double)(totalSweeps * input.MaxPages)) * 90);
+                    await progress.ReportProgressAsync(pct, $"[{sweepIndex + 1}/{totalSweeps}] {category} p{page} — Ins:{totalInserted}");
                     await Task.Delay(InterPageDelayMs, cancellationToken);
                 }
                 sweepIndex++;
@@ -139,10 +215,8 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
         string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
     {
         var client = _http.CreateClient("TheMuse");
-        // The Muse uses 0-indexed pages
         var url = $"https://www.themuse.com/api/public/jobs?page={page - 1}&descending=true&company_size={companySize}";
-        if (!string.IsNullOrWhiteSpace(_apiKey))           url += $"&api_key={_apiKey}";
-        if (!string.IsNullOrWhiteSpace(input.SearchQuery)) url += $"&category={Uri.EscapeDataString(input.SearchQuery)}";
+        if (!string.IsNullOrWhiteSpace(_apiKey)) url += $"&api_key={_apiKey}";
 
         var json = await client.GetFromJsonAsync<JsonElement>(url, ct);
         var jobs = new List<ApiRawJob>();
@@ -156,6 +230,33 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
                 if (job != null) jobs.Add(job);
             }
             catch (Exception ex) { Logger.LogWarning(ex, "[TheMuse] Map failed"); }
+        }
+        return jobs;
+    }
+
+    // ── Category-based page fetch ─────────────────────────────────────────────
+
+    private async Task<List<ApiRawJob>> FetchMuseCategoryPageAsync(
+        int page, JobFetchInput input, string category,
+        string fetchRunId, HashSet<string> sponsors, CancellationToken ct)
+    {
+        var client = _http.CreateClient("TheMuse");
+        var url = $"https://www.themuse.com/api/public/jobs?page={page - 1}&descending=true" +
+                  $"&category={Uri.EscapeDataString(category)}";
+        if (!string.IsNullOrWhiteSpace(_apiKey)) url += $"&api_key={_apiKey}";
+
+        var json = await client.GetFromJsonAsync<JsonElement>(url, ct);
+        var jobs = new List<ApiRawJob>();
+        if (!json.TryGetProperty("results", out var results)) return jobs;
+
+        foreach (var item in results.EnumerateArray())
+        {
+            try
+            {
+                var job = MapJob(item, fetchRunId, sponsors, false, false);
+                if (job != null) jobs.Add(job);
+            }
+            catch (Exception ex) { Logger.LogWarning(ex, "[TheMuse] Map failed (category={Cat})", category); }
         }
         return jobs;
     }

@@ -291,6 +291,10 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         if (country != null && UsLocationHelper.CountryVariants.Contains(country))
             country = "US";
 
+        // Use tags as the industry signal — Arbeitnow tags are tech category keywords
+        // (e.g. "javascript", "python", "devops", "react") that alias-match to md.industries
+        var industryHint = skills?.Length > 0 ? skills[0] : null;
+
         return new ApiRawJob
         {
             PublicId          = Guid.NewGuid().ToString("N"),
@@ -313,6 +317,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
             JobWorkMode       = workMode,
             ContractType      = contractType,
             JobLevel          = NormalizeJobLevel(title),
+            Industry          = industryHint,
             CompanyName       = companyName,
             CompanyLogoUrl    = null,
             Skills            = skills,

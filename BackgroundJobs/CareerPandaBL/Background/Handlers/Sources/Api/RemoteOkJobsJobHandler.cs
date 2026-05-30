@@ -211,7 +211,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
                 var location = item.TryGetProperty("location", out var loc) ? loc.GetString() ?? "" : "";
                 if (!IsUsOrRemoteLocation(location)) continue;
 
-                var job = MapJob(item, fetchRunId, sponsors);
+                var job = MapJob(item, fetchRunId, sponsors, tag);
 
                 if (job.PostDate.HasValue && job.PostDate.Value < cutoff) continue;
 
@@ -271,7 +271,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         return (null, null, null);
     }
 
-    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors)
+    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors, string tag = "")
     {
         var title       = j.TryGetProperty("position",    out var t)   ? t.GetString()   : "Untitled";
         var companyName = j.TryGetProperty("company",     out var co)  ? co.GetString()  : null;
@@ -393,6 +393,9 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             ContractType      = contractType,
             CompanyName       = companyName,
             CompanyLogoUrl    = logoUrl,
+            // tag is the RemoteOK category queried (e.g. "javascript", "devops", "python")
+            // — store as Industry so NormalizeJobs can alias-match it to md.industries
+            Industry          = string.IsNullOrWhiteSpace(tag) ? null : tag,
             Skills            = tags,
             // ── All flags ─────────────────────────────────────────────────────
             IsH1BSponsored    = isH1B,

@@ -1030,4 +1030,169 @@ public class JobFetchDAPostgres : IJobFetchDA
                 .SetProperty(x => x.EnrichedAt, DateTime.UtcNow),
             cancellationToken);
     }
+
+    // ── Normalization ────────────────────────────────────────────────────────
+
+    public Task<List<ApiRawJob>> GetRawJobsForNormalizationAsync(int afterId, int batchSize, CancellationToken ct = default)
+        => _db.RawJobs.AsNoTracking()
+            .Where(j => j.Id > afterId && (j.NormStatus == null || j.NormStatus == "pending"))
+            .OrderBy(j => j.Id)
+            .Take(batchSize)
+            .ToListAsync(ct);
+
+    public async Task<Dictionary<string, int>> GetIndustryAliasMapAsync(CancellationToken ct = default)
+        => await _db.IndustryAliases.AsNoTracking()
+            .ToDictionaryAsync(a => a.Alias, a => a.IndustryId, ct);
+
+    public async Task<Dictionary<string, int>> GetJobRoleAliasMapAsync(CancellationToken ct = default)
+        => await _db.JobRoleAliases.AsNoTracking()
+            .ToDictionaryAsync(a => a.Alias, a => a.JobRoleId, ct);
+
+    public Task UpdateJobNormalizationAsync(int jobId, int? industryId, int? jobRoleId, string normStatus, CancellationToken ct = default)
+        => _db.RawJobs
+            .Where(j => j.Id == jobId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.IndustryId,  industryId)
+                .SetProperty(x => x.JobRoleId,   jobRoleId)
+                .SetProperty(x => x.NormStatus,  normStatus),
+            ct);
+
+    public async Task TryAddIndustryAliasAsync(string alias, int industryId, string? source, CancellationToken ct = default)
+    {
+        alias = alias.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(alias)) return;
+        if (await _db.IndustryAliases.AnyAsync(a => a.Alias == alias, ct)) return;
+        _db.IndustryAliases.Add(new CareerPanda.DataAccess.Entities.Md.MdIndustryAlias
+        {
+            Alias = alias, IndustryId = industryId, Source = source, CreatedOn = DateTime.UtcNow
+        });
+        try { await _db.SaveChangesAsync(ct); }
+        catch { _db.ChangeTracker.Clear(); } // ignore unique constraint race
+    }
+
+    public async Task TryAddJobRoleAliasAsync(string alias, int jobRoleId, string? source, CancellationToken ct = default)
+    {
+        alias = alias.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(alias)) return;
+        if (await _db.JobRoleAliases.AnyAsync(a => a.Alias == alias, ct)) return;
+        _db.JobRoleAliases.Add(new CareerPanda.DataAccess.Entities.Md.MdJobRoleAlias
+        {
+            Alias = alias, JobRoleId = jobRoleId, Source = source, CreatedOn = DateTime.UtcNow
+        });
+        try { await _db.SaveChangesAsync(ct); }
+        catch { _db.ChangeTracker.Clear(); }
+    }
+
+    // ── Reference data ───────────────────────────────────────────────────────
+
+    public Task<List<IndustryDto>> GetActiveIndustriesAsync(CancellationToken ct = default)
+        => _db.Industries.AsNoTracking()
+            .Where(i => i.IsActive)
+            .OrderBy(i => i.Name)
+            .Select(i => new IndustryDto { Id = (int)i.Id, Slug = i.Slug, Name = i.Name })
+            .ToListAsync(ct);
+
+    public Task<List<JobRoleDto>> GetActiveJobRolesAsync(int? industryId = null, CancellationToken ct = default)
+        => _db.JobRoles.AsNoTracking()
+            .Where(r => r.IsActive && (industryId == null || r.IndustryId == industryId))
+            .OrderBy(r => r.IndustryId)
+            .ThenBy(r => r.Name)
+            .Select(r => new JobRoleDto
+            {
+                Id = (int)r.Id, IndustryId = r.IndustryId,
+                Slug = r.Slug, Name = r.Name, SearchQuery = r.SearchQuery
+            })
+            .ToListAsync(ct);
+
+    // ── Portal job search ────────────────────────────────────────────────────
+
+    public async Task<(List<RawJobSearchResult> Items, int Total)> SearchRawJobsAsync(
+        RawJobSearchQuery query, CancellationToken ct = default)
+    {
+        var q = _db.RawJobs.AsNoTracking()
+            .Where(j => j.Status == true && j.Country == "US");
+
+        if (!string.IsNullOrWhiteSpace(query.Keyword))
+        {
+            var kw = query.Keyword.ToLower();
+            q = q.Where(j => j.JobTitle.ToLower().Contains(kw) ||
+                              (j.JobDescription != null && j.JobDescription.ToLower().Contains(kw)));
+        }
+
+        if (query.IndustryIds is { Length: > 0 })
+            q = q.Where(j => j.IndustryId != null && query.IndustryIds.Contains(j.IndustryId.Value));
+
+        if (query.JobRoleIds is { Length: > 0 })
+            q = q.Where(j => j.JobRoleId != null && query.JobRoleIds.Contains(j.JobRoleId.Value));
+
+        if (query.WorkTypes is { Length: > 0 })
+            q = q.Where(j => j.WorkType != null && query.WorkTypes.Contains(j.WorkType));
+
+        if (query.ContractTypes is { Length: > 0 })
+            q = q.Where(j => j.ContractType != null && query.ContractTypes.Contains(j.ContractType));
+
+        if (query.States is { Length: > 0 })
+            q = q.Where(j => j.State != null && query.States.Contains(j.State));
+
+        if (!string.IsNullOrWhiteSpace(query.JobLevel))
+            q = q.Where(j => j.JobLevel == query.JobLevel);
+
+        if (query.SalaryMin.HasValue)
+            q = q.Where(j => j.SalaryMin >= query.SalaryMin.Value || j.SalaryMax >= query.SalaryMin.Value);
+
+        if (query.PostedWithinDays.HasValue)
+        {
+            var cutoff = DateTime.UtcNow.AddDays(-query.PostedWithinDays.Value);
+            q = q.Where(j => j.PostDate >= cutoff);
+        }
+
+        if (query.H1BSponsored == true)  q = q.Where(j => j.IsH1BSponsored == true);
+        if (query.OptCpt == true)         q = q.Where(j => j.IsOptCpt == true);
+        if (query.GreenCard == true)      q = q.Where(j => j.IsGreenCard == true);
+        if (query.Remote == true)         q = q.Where(j => j.WorkType == "Remote");
+
+        var total = await q.CountAsync(ct);
+
+        var page     = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+
+        var items = await q
+            .OrderByDescending(j => j.PostDate)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Join(_db.Companies, j => j.OurCompanyId, c => c.Id,
+                (j, c) => new { j, c })
+            .GroupJoin(_db.Industries, x => x.j.IndustryId, i => (int?)i.Id,
+                (x, inds) => new { x.j, x.c, ind = inds.FirstOrDefault() })
+            .GroupJoin(_db.JobRoles, x => x.j.JobRoleId, r => (int?)r.Id,
+                (x, roles) => new { x.j, x.c, x.ind, role = roles.FirstOrDefault() })
+            .Select(x => new RawJobSearchResult
+            {
+                Id             = x.j.Id,
+                PublicId       = x.j.PublicId,
+                JobTitle       = x.j.JobTitle,
+                JobLink        = x.j.JobLink,
+                CompanyName    = x.j.CompanyName ?? x.c.CompanyName,
+                CompanyLogo    = x.c.LogoUrl,
+                CompanyWebsite = x.c.Website,
+                Industry       = x.ind != null ? x.ind.Name : null,
+                Role           = x.role != null ? x.role.Name : null,
+                WorkType       = x.j.WorkType,
+                ContractType   = x.j.ContractType,
+                JobLevel       = x.j.JobLevel,
+                City           = x.j.City,
+                State          = x.j.State,
+                SalaryMin      = x.j.SalaryMin,
+                SalaryMax      = x.j.SalaryMax,
+                SalaryType     = x.j.SalaryType,
+                PostDate       = x.j.PostDate,
+                IsH1BSponsored = x.j.IsH1BSponsored,
+                IsOptCpt       = x.j.IsOptCpt,
+                IsGreenCard    = x.j.IsGreenCard,
+                Source         = x.j.Source
+            })
+            .ToListAsync(ct);
+
+        return (items, total);
+    }
 }

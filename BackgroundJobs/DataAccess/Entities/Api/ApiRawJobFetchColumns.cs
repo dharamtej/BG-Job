@@ -149,4 +149,9 @@ public partial class ApiRawJob
     /// <summary>Job is open to veterans / has veteran hiring preference (USAJobs HiringPath "veterans").</summary>
     [Column("is_veterans_eligible")]
     public bool? IsVeteransEligible { get; set; }
+
+    // ── Normalization ────────────────────────────────────────────────────────
+    /// <summary>pending | auto_high | auto_low | manual | failed</summary>
+    [Column("norm_status")]
+    public string? NormStatus { get; set; }
 }
