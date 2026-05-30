@@ -207,8 +207,9 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         return CompanyNameNormalizer.BuildSponsorSet(names);
     }
 
-    // ── Per-company fetch: list jobs → detail each job ───────────────────────
-    // tokenStatus = null means transient error — caller must NOT update the token status
+    // ── Per-company fetch: board info → job list → job details ──────────────
+    // Returns tokenStatus=null to tell caller NOT to update the token row (transient error).
+    // Only 404 on the board-info endpoint is a definitive "board doesn't exist" signal.
 
     private async Task<(List<ApiRawJob> jobs, short httpCode, string? tokenStatus, int jobCount)>
         FetchCompanyJobsAsync(
@@ -218,51 +219,84 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             bool isH1B,
             CancellationToken ct)
     {
-        // Step 1: get job list (id + basic fields) — no auth required
-        var listUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}/jobs";
-        using var listResp = await client.GetAsync(listUrl, ct);
-        var httpCode = (short)listResp.StatusCode;
+        // ── Step 1: board info (/v1/boards/{token}) ──────────────────────────
+        // This is the ONLY reliable signal for whether a board truly exists.
+        // 404 here = board gone. 403/429/5xx = transient, retry next run.
+        var boardUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}";
+        using var boardResp = await RetryGetAsync(client, boardUrl, ct);
+        var httpCode = (short)boardResp.StatusCode;
 
-        if (!listResp.IsSuccessStatusCode)
+        if (!boardResp.IsSuccessStatusCode)
         {
-            // 403/404/429 are expected for stale or rate-limited tokens — log at Debug to avoid
-            // flooding Railway's 500 logs/sec cap when hundreds of invalid boards run in parallel.
-            var sc = listResp.StatusCode;
+            var sc = boardResp.StatusCode;
             if (sc is System.Net.HttpStatusCode.Forbidden
                     or System.Net.HttpStatusCode.NotFound
                     or System.Net.HttpStatusCode.TooManyRequests)
-                _logger.LogDebug("[Greenhouse] {Status} fetching job list for {Token}",
-                    (int)sc, token.BoardToken);
+                _logger.LogDebug("[Greenhouse] {Status} on board-info for {Token}", (int)sc, token.BoardToken);
             else
-                _logger.LogWarning("[Greenhouse] {Status} fetching job list for {Token}",
-                    (int)sc, token.BoardToken);
+                _logger.LogWarning("[Greenhouse] {Status} on board-info for {Token}", (int)sc, token.BoardToken);
 
-            // Definitive failure — board genuinely doesn't exist.
+            // Only 404 is definitive — board genuinely deleted or never existed
             if (sc == System.Net.HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
 
-            // 401/403 used to be marked INVALID forever, but they're frequently caused by
-            // Cloudflare WAF / rate-limit under burst load — treat as transient now.
-            // 5xx / 429 / network errors are also transient — status unchanged so it retries.
+            // All other errors are transient (WAF, rate-limit, network) — retry next run
             return ([], httpCode, null, 0);
         }
 
-        var listJson = await listResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-        if (!listJson.TryGetProperty("jobs", out var jobsEl) || jobsEl.ValueKind != JsonValueKind.Array)
-            return ([], httpCode, "INVALID", 0);
+        // Extract company enrichment data from board info (logo, name correction, website)
+        string? companyLogoFromBoard = null;
+        try
+        {
+            var boardJson = await ReadJsonAsync(boardResp.Content, ct);
+            if (boardJson.TryGetProperty("logo", out var logo) && logo.ValueKind == JsonValueKind.String)
+                companyLogoFromBoard = logo.GetString();
+        }
+        catch { /* board info parse failure is non-fatal — continue to jobs */ }
 
-        var jobIds = jobsEl.EnumerateArray()
-            .Where(j => j.TryGetProperty("id", out _))
-            .Select(j => j.GetProperty("id").GetInt64())
-            .ToList();
+        // ── Step 2: job list (/v1/boards/{token}/jobs) ───────────────────────
+        var listUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}/jobs";
+        using var listResp = await RetryGetAsync(client, listUrl, ct);
+
+        if (!listResp.IsSuccessStatusCode)
+        {
+            // Board exists (step 1 passed) but job list failed — transient
+            _logger.LogDebug("[Greenhouse] {Status} on job-list for {Token}", (short)listResp.StatusCode, token.BoardToken);
+            return ([], (short)listResp.StatusCode, null, 0);
+        }
+
+        List<long> jobIds;
+        try
+        {
+            var listJson = await ReadJsonAsync(listResp.Content, ct);
+
+            // If `jobs` property is missing it's a transient/malformed response — NOT a definitive INVALID
+            // (Greenhouse sometimes returns error JSON with 200 status under rate-limit pressure)
+            if (!listJson.TryGetProperty("jobs", out var jobsEl) || jobsEl.ValueKind != JsonValueKind.Array)
+            {
+                _logger.LogDebug("[Greenhouse] No 'jobs' property in 200 response for {Token} — treating as transient", token.BoardToken);
+                return ([], httpCode, null, 0);
+            }
+
+            jobIds = jobsEl.EnumerateArray()
+                .Where(j => j.TryGetProperty("id", out _))
+                .Select(j => j.GetProperty("id").GetInt64())
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Greenhouse] Job-list JSON parse failed for {Token} — transient", token.BoardToken);
+            return ([], httpCode, null, 0);
+        }
 
         if (jobIds.Count == 0)
             return ([], httpCode, "EMPTY", 0);
 
-        _logger.LogInformation("[Greenhouse] {Company}: {Count} jobs to fetch", token.CompanyName, jobIds.Count);
+        _logger.LogInformation("[Greenhouse] {Company}: {Count} jobs to fetch detail", token.CompanyName, jobIds.Count);
 
-        // Step 2: fetch full detail for each job — bounded concurrency, no artificial delay
-        var results = new ConcurrentBag<ApiRawJob>();
+        // ── Step 3: job details (/v1/boards/{token}/jobs/{id}?content=true) ──
+        var results    = new ConcurrentBag<ApiRawJob>();
+        int detailFails = 0;
         var detailOpts = new ParallelOptions
         {
             MaxDegreeOfParallelism = _jobDetailParallel,
@@ -274,28 +308,46 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             try
             {
                 var detailUrl = $"https://boards-api.greenhouse.io/v1/boards/{token.BoardToken}/jobs/{jobId}?content=true";
-                using var detailResp = await client.GetAsync(detailUrl, innerCt);
+                using var detailResp = await RetryGetAsync(client, detailUrl, innerCt);
 
-                if (!detailResp.IsSuccessStatusCode) return;
+                if (!detailResp.IsSuccessStatusCode)
+                {
+                    Interlocked.Increment(ref detailFails);
+                    return;
+                }
 
-                var detail = await detailResp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: innerCt);
-                var mapped = MapJob(detail, token, fetchRunId, isH1B);
+                var detail = await ReadJsonAsync(detailResp.Content, innerCt);
+                // Pass logo from board-info so it enriches the company record
+                var mapped = MapJob(detail, token, fetchRunId, isH1B, companyLogoFromBoard);
                 if (mapped != null) results.Add(mapped);
             }
             catch (OperationCanceledException) when (innerCt.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[Greenhouse] Failed fetching job {JobId} for {Token}", jobId, token.BoardToken);
+                Interlocked.Increment(ref detailFails);
+                _logger.LogWarning(ex, "[Greenhouse] Detail fetch failed job {JobId} for {Token}", jobId, token.BoardToken);
             }
         });
 
         var list = results.ToList();
+
+        // If ALL detail fetches failed (rate-limit burst), treat as transient — do not mark EMPTY
+        // so the next run retries the full detail sweep. Only mark EMPTY if the list API
+        // confirmed zero jobs. Mark VALID only when we actually got job records back.
+        if (list.Count == 0 && detailFails == jobIds.Count)
+        {
+            _logger.LogWarning("[Greenhouse] All {N} detail calls failed for {Token} — transient, status unchanged",
+                jobIds.Count, token.BoardToken);
+            return ([], httpCode, null, 0);
+        }
+
         return (list, httpCode, list.Count > 0 ? "VALID" : "EMPTY", jobIds.Count);
     }
 
     // ── Field mapping ─────────────────────────────────────────────────────────
 
-    private static ApiRawJob? MapJob(JsonElement d, ApiGreenhouseBoardToken token, string fetchRunId, bool isH1B)
+    private static ApiRawJob? MapJob(JsonElement d, ApiGreenhouseBoardToken token, string fetchRunId, bool isH1B,
+        string? boardLogoUrl = null)
     {
         if (!d.TryGetProperty("id", out var idEl)) return null;
 
@@ -408,6 +460,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             Skills          = skills,
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
+            CompanyLogoUrl  = boardLogoUrl,
             CompanyUrl      = token.BoardUrl,
             CompanyType     = "Private",
             IsH1BSponsored  = isH1BFinal,
@@ -480,5 +533,53 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
 
         if (state == null && country == "US" && parts.Length >= 2)
             country = parts[1].Trim();
+    }
+
+    // ── Retry helper with exponential back-off ────────────────────────────────
+    // Retries on 429 (rate-limit) and 503 (transient overload) only.
+    // Other status codes are returned as-is so callers decide what they mean.
+    //
+    // Back-off schedule (maxRetries = 3):
+    //   attempt 1 → wait 2s ± 250ms jitter
+    //   attempt 2 → wait 4s ± 250ms jitter
+    //   attempt 3 → wait 8s ± 250ms jitter
+    //   attempt 4 → return last response (caller handles)
+
+    private static readonly Random _jitter = new();
+    private const int MaxRetries = 3;
+
+    private static async Task<HttpResponseMessage> RetryGetAsync(
+        HttpClient client, string url, CancellationToken ct)
+    {
+        HttpResponseMessage? resp = null;
+        for (int attempt = 0; attempt <= MaxRetries; attempt++)
+        {
+            resp?.Dispose();
+            resp = await client.GetAsync(url, ct);
+
+            if ((int)resp.StatusCode != 429 && (int)resp.StatusCode != 503)
+                return resp;   // success or a non-retryable error
+
+            if (attempt == MaxRetries) break;
+
+            // Honour Retry-After header if present (Greenhouse/Cloudflare set it on 429)
+            int retryAfterMs = 0;
+            if (resp.Headers.RetryAfter?.Delta is { } delta)
+                retryAfterMs = (int)delta.TotalMilliseconds;
+            else if (resp.Headers.RetryAfter?.Date is { } date)
+                retryAfterMs = (int)(date - DateTimeOffset.UtcNow).TotalMilliseconds;
+
+            resp.Dispose();
+            resp = null;
+
+            int backoffMs = retryAfterMs > 0
+                ? retryAfterMs + _jitter.Next(0, 500)          // use server hint + small jitter
+                : (int)Math.Pow(2, attempt + 1) * 1000 + _jitter.Next(-250, 250);  // exponential
+
+            await Task.Delay(Math.Max(500, backoffMs), ct);
+        }
+
+        // Return last response (429/503) so caller can record it
+        return resp!;
     }
 }

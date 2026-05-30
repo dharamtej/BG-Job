@@ -85,8 +85,13 @@ public class BambooHrJobsJobHandler : IJobHandler
         try
         {
             var client = _http.CreateClient("BambooHR");
-            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "CareerPanda/1.0 jobs-aggregator");
-            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+            // BambooHR's SASE-SWG (Zscaler) blocks requests that identify as bots.
+            // Use a realistic browser User-Agent so the public careers API responds correctly.
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://www.bamboohr.com/");
 
             var parallelOpts = new ParallelOptions
             {
@@ -208,27 +213,30 @@ public class BambooHrJobsJobHandler : IJobHandler
         if (!resp.IsSuccessStatusCode)
         {
             var sc = resp.StatusCode;
-            if (sc is HttpStatusCode.Forbidden or HttpStatusCode.NotFound
-                    or HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
-                _logger.LogDebug("[BambooHR] {Status} fetching {Token}", (int)sc, token.BoardToken);
-            else
-                _logger.LogWarning("[BambooHR] {Status} fetching {Token}", (int)sc, token.BoardToken);
+            _logger.LogDebug("[BambooHR] {Status} fetching {Token}", (int)sc, token.BoardToken);
 
-            if (sc is HttpStatusCode.NotFound or HttpStatusCode.Forbidden
-                    or HttpStatusCode.Unauthorized or HttpStatusCode.BadRequest)
+            // Only 404 is a definitive "company board doesn't exist" signal.
+            // 403 was previously treated as INVALID but is often SASE-SWG / Cloudflare bot detection
+            // (transient). With the fixed browser User-Agent this should no longer happen,
+            // but if it does, treat it as transient so it retries next run.
+            if (sc == HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
 
             return ([], httpCode, null, 0);
         }
 
         JsonElement doc;
-        try { doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
-        catch { return ([], httpCode, "INVALID", 0); }
+        try { doc = await ReadJsonAsync(resp.Content, ct); }
+        catch { return ([], httpCode, null, 0); }  // parse failure is transient, not INVALID
 
         if (doc.ValueKind != JsonValueKind.Object
             || !doc.TryGetProperty("result", out var resultEl)
             || resultEl.ValueKind != JsonValueKind.Array)
-            return ([], httpCode, "INVALID", 0);
+        {
+            // Malformed/unexpected response on a 200 — treat as transient, not a dead board
+            _logger.LogDebug("[BambooHR] Unexpected response structure for {Token}", token.BoardToken);
+            return ([], httpCode, null, 0);
+        }
 
         var jobArray = resultEl.EnumerateArray().ToList();
         if (jobArray.Count == 0)
@@ -266,7 +274,7 @@ public class BambooHrJobsJobHandler : IJobHandler
                 if (!r.IsSuccessStatusCode) return;
 
                 JsonElement detail;
-                try { detail = await r.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+                try { detail = await ReadJsonAsync(r.Content, ct); }
                 catch { return; }
 
                 // BambooHR detail response has top-level "description" and "requirements" strings

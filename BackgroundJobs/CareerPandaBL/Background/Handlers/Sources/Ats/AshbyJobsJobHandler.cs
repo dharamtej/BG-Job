@@ -225,7 +225,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
             return ([], httpCode, null, 0);
         }
 
-        var doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var doc = await ReadJsonAsync(resp.Content, ct);
 
         if (doc.ValueKind != JsonValueKind.Object
             || !doc.TryGetProperty("jobs", out var jobsEl)

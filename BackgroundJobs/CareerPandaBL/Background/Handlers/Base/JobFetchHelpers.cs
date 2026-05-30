@@ -1,6 +1,7 @@
 // CareerPandaBL/Background/Handlers/JobFetchHelpers.cs
 // Shared static helpers for all job fetch handlers — both base-handler subclasses
 // and standalone IJobHandler implementations (ATS boards, Remotive, WWR).
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -135,5 +136,17 @@ internal static class JobFetchHelpers
         AddSection("Responsibilities");
 
         return lines.Count == 0 ? null : string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// Reads the HTTP response body as a string then deserialises to JsonElement.
+    /// Avoids ReadFromJsonAsync which throws when the server returns a non-standard
+    /// charset name like "utf8" (without hyphen) instead of the RFC-compliant "utf-8".
+    /// </summary>
+    internal static async Task<JsonElement> ReadJsonAsync(
+        HttpContent content, CancellationToken ct = default)
+    {
+        var raw = await content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<JsonElement>(raw);
     }
 }

@@ -247,7 +247,7 @@ public class WorkdayJobsJobHandler : IJobHandler
                 break;
             }
 
-            var doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var doc = await ReadJsonAsync(resp.Content, ct);
 
             // First page — determine total
             if (offset == 0)
@@ -323,7 +323,7 @@ public class WorkdayJobsJobHandler : IJobHandler
                 if (!resp.IsSuccessStatusCode) return;
 
                 JsonElement detail;
-                try { detail = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+                try { detail = await ReadJsonAsync(resp.Content, ct); }
                 catch { return; }
 
                 if (!detail.TryGetProperty("jobPostingInfo", out var jpi) || jpi.ValueKind != JsonValueKind.Object)

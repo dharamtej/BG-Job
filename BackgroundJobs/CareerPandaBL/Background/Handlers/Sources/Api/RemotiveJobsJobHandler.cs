@@ -63,7 +63,7 @@ public class RemotiveJobsJobHandler : IJobHandler
             // Single call — Remotive returns the whole active set.
             using var resp = await http.GetAsync("https://remotive.com/api/remote-jobs?limit=10000", cancellationToken);
             resp.EnsureSuccessStatusCode();
-            var doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+            var doc = await ReadJsonAsync(resp.Content, cancellationToken);
             if (!doc.TryGetProperty("jobs", out var jobsEl) || jobsEl.ValueKind != JsonValueKind.Array)
                 throw new InvalidOperationException("Remotive response has no 'jobs' array.");
 

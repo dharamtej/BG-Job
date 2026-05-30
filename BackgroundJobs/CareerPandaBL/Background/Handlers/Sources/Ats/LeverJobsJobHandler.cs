@@ -226,7 +226,7 @@ public class LeverJobsJobHandler : IJobHandler
             return ([], httpCode, null, 0);
         }
 
-        var jobs = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var jobs = await ReadJsonAsync(resp.Content, ct);
 
         if (jobs.ValueKind != JsonValueKind.Array)
             return ([], httpCode, "INVALID", 0);

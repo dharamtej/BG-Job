@@ -190,4 +190,6 @@ public abstract class JobFetchBaseHandler : IJobHandler
     protected static string? StripHtml(string? html)                             => JobFetchHelpers.StripHtml(html);
     protected static string? BuildSalaryRangeText(decimal? min, decimal? max, string? period)
         => JobFetchHelpers.BuildSalaryRangeText(min, max, period);
+    protected static Task<System.Text.Json.JsonElement> ReadJsonAsync(System.Net.Http.HttpContent content, CancellationToken ct = default)
+        => JobFetchHelpers.ReadJsonAsync(content, ct);
 }

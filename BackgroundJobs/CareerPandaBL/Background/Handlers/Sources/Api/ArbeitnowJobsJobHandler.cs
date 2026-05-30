@@ -161,7 +161,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         var res = await client.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
 
-        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var json = await ReadJsonAsync(res.Content, ct);
 
         if (!json.TryGetProperty("data", out var dataArray) ||
             dataArray.ValueKind != JsonValueKind.Array)

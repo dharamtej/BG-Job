@@ -96,8 +96,9 @@ public partial class IcimsJobsJobHandler : IJobHandler
         {
             var client = _http.CreateClient("iCIMS");
             client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
-                "Mozilla/5.0 (compatible; CareerPanda/1.0; jobs-aggregator)");
-            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml");
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
 
             var parallelOpts = new ParallelOptions
             {
@@ -216,10 +217,10 @@ public partial class IcimsJobsJobHandler : IJobHandler
 
         if (!resp.IsSuccessStatusCode)
         {
-            if (resp.StatusCode is HttpStatusCode.NotFound
-                                or HttpStatusCode.Forbidden
-                                or HttpStatusCode.Unauthorized
-                                or HttpStatusCode.BadRequest)
+            // Only 404 confirms the board definitely doesn't exist.
+            // 403/401 can be bot-detection (transient) — with browser User-Agent fixed, rare,
+            // but treat as transient so we retry rather than permanently INVALID.
+            if (resp.StatusCode is HttpStatusCode.NotFound)
                 return ([], httpCode, "INVALID", 0);
             return ([], httpCode, null, 0);
         }

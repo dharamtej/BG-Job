@@ -181,7 +181,7 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
 
             res.EnsureSuccessStatusCode();
 
-            var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var json = await ReadJsonAsync(res.Content, ct);
             var jobs = new List<ApiRawJob>();
 
             if (!json.TryGetProperty("SearchResult", out var sr)) return jobs;

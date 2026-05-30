@@ -7,6 +7,7 @@
 //        its own api.job_fetch_runs row (fresh JobId) so it shows up individually
 //        under GET /api/fetchjobs/runs. A failure in one child is logged and the
 //        chain continues with the next.
+using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,8 +30,8 @@ public class RunAllJobsJobHandler : IJobHandler
         "AshbyJobs",
         "WorkdayJobs",
         "RecruiteeJobs",
-        "BambooHRJobs",
-        "iCIMSJobs",
+        // "BambooHRJobs",  // DISABLED — Zscaler SASE-SWG blocks Railway datacenter IPs entirely
+        // "iCIMSJobs",     // DISABLED — AWS WAF JavaScript challenge; impossible from server-side HTTP
         "GreenhouseJobs",
         // ── Free / unlimited API sources ────────────────────────────────────
         // JSearch (JSearchJobs) excluded — rate-limited quota, run manually.
@@ -82,7 +83,8 @@ public class RunAllJobsJobHandler : IJobHandler
         }
 
         var handlers   = _serviceProvider.GetServices<IJobHandler>();
-        int total      = ChildJobTypes.Length;
+        var jobTypes   = ResolveJobTypes(request.InputPayload);
+        int total      = jobTypes.Length;
         int succeeded  = 0, failed = 0, skipped = 0;
 
         // Parent fetch_run so the chain appears as a single row in Run History with
@@ -109,11 +111,11 @@ public class RunAllJobsJobHandler : IJobHandler
         try
         {
 
-        for (int i = 0; i < ChildJobTypes.Length; i++)
+        for (int i = 0; i < jobTypes.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var childType = ChildJobTypes[i];
+            var childType = jobTypes[i];
             var handler   = handlers.FirstOrDefault(h =>
                 h.JobType.Equals(childType, StringComparison.OrdinalIgnoreCase));
 
@@ -218,6 +220,27 @@ public class RunAllJobsJobHandler : IJobHandler
             // Release the run-once slot so the next scheduled fire (or a manual trigger) can proceed.
             Interlocked.Exchange(ref _running, 0);
         }
+    }
+
+    // Returns either the caller-supplied custom order (from InputPayload.customOrder) or the hardcoded default.
+    private static string[] ResolveJobTypes(string? inputPayload)
+    {
+        if (string.IsNullOrWhiteSpace(inputPayload) || inputPayload == "{}") return ChildJobTypes;
+        try
+        {
+            using var doc = JsonDocument.Parse(inputPayload);
+            if (doc.RootElement.TryGetProperty("customOrder", out var el) && el.ValueKind == JsonValueKind.Array)
+            {
+                var list = el.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
+                    .Select(e => e.GetString()!)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .ToArray();
+                if (list.Length > 0) return list;
+            }
+        }
+        catch { /* malformed payload — fall back to default */ }
+        return ChildJobTypes;
     }
 
     // Maps a child handler's 0-100 progress onto [slice * index, slice * (index+1)]

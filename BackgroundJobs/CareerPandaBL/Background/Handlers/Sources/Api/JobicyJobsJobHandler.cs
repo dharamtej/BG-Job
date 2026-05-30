@@ -113,7 +113,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
                         var res = await client.SendAsync(req, cancellationToken);
                         res.EnsureSuccessStatusCode();
 
-                        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+                        var json = await ReadJsonAsync(res.Content, cancellationToken);
 
                         if (json.TryGetProperty("jobs", out var jobsArray) &&
                             jobsArray.ValueKind == JsonValueKind.Array)
@@ -194,7 +194,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             var res = await client.SendAsync(req, ct);
             res.EnsureSuccessStatusCode();
 
-            var json  = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var json  = await ReadJsonAsync(res.Content, ct);
             var key   = getParam == "industries" ? "industries" : "locations";
 
             if (!json.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)

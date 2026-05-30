@@ -211,7 +211,7 @@ public class RecruiteeJobsJobHandler : IJobHandler
         }
 
         JsonElement doc;
-        try { doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+        try { doc = await ReadJsonAsync(resp.Content, ct); }
         catch { return ([], httpCode, "INVALID", 0); }
 
         if (doc.ValueKind != JsonValueKind.Object

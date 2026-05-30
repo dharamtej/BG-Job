@@ -195,7 +195,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         var res = await client.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
 
-        var json = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        var json = await ReadJsonAsync(res.Content, ct);
 
         var cutoff = DateTime.UtcNow.AddHours(-hoursBack);
         var jobs   = new List<ApiRawJob>();

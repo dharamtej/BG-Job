@@ -210,7 +210,10 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         var res = await client.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
 
-        var json    = await res.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+        // ReadFromJsonAsync fails when Adzuna returns charset=utf8 (no hyphen) —
+        // .NET only recognises utf-8. Read raw bytes and deserialise manually instead.
+        var raw  = await res.Content.ReadAsStringAsync(ct);
+        var json = System.Text.Json.JsonSerializer.Deserialize<JsonElement>(raw);
         var results = json.GetProperty("results");
 
         var jobs = new List<ApiRawJob>();
