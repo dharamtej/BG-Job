@@ -39,4 +39,21 @@ internal static class UsLocationHelper
         if (!string.IsNullOrEmpty(state) && (StateAbbrs.Contains(state) || StateNames.Contains(state))) return true;
         return false;
     }
+
+    // True when a TheMuse / free-text location string is US-eligible:
+    // null/empty (fully remote), explicit "United States", "Remote", "Anywhere", or contains
+    // a known US state abbreviation in ", XX" form (e.g. "New York, NY").
+    public static bool IsUsFriendlyLocation(string? location)
+    {
+        if (string.IsNullOrWhiteSpace(location)) return true;
+        if (location.Contains("United States", StringComparison.OrdinalIgnoreCase)) return true;
+        if (location.Contains("Remote",        StringComparison.OrdinalIgnoreCase)) return true;
+        if (location.Contains("Anywhere",      StringComparison.OrdinalIgnoreCase)) return true;
+        if (CountryVariants.Any(v => location.Contains(v, StringComparison.OrdinalIgnoreCase))) return true;
+        foreach (var abbr in StateAbbrs)
+        {
+            if (location.Contains(", " + abbr, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
 }

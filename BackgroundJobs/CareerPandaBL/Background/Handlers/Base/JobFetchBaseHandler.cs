@@ -182,7 +182,12 @@ public abstract class JobFetchBaseHandler : IJobHandler
     protected static int? ParseHoursBack(DateTime? postDate) =>
         postDate.HasValue ? (int)(DateTime.UtcNow - postDate.Value).TotalHours : null;
 
-    protected static bool ContainsAny(string? text, params string[] keywords) =>
-        !string.IsNullOrWhiteSpace(text) &&
-        keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
+    // Delegates to JobFetchHelpers so all handlers (base and standalone) share one implementation.
+    protected static bool    ContainsAny(string? text, params string[] keywords) => JobFetchHelpers.ContainsAny(text, keywords);
+    protected static string? NormalizeSalaryPeriod(string? raw)                  => JobFetchHelpers.NormalizeSalaryPeriod(raw);
+    protected static string? NormalizeJobLevel(string? raw)                      => JobFetchHelpers.NormalizeJobLevel(raw);
+    protected static string? NormalizeState(string? raw)                         => JobFetchHelpers.NormalizeState(raw);
+    protected static string? StripHtml(string? html)                             => JobFetchHelpers.StripHtml(html);
+    protected static string? BuildSalaryRangeText(decimal? min, decimal? max, string? period)
+        => JobFetchHelpers.BuildSalaryRangeText(min, max, period);
 }

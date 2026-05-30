@@ -25,26 +25,26 @@ public class RunAllJobsJobHandler : IJobHandler
         // ── ATS board-token sources (each internally parallel) ──────────────
         // Greenhouse is intentionally last among ATS — it has the largest token
         // set (17K+) and the heaviest per-board cost (N+1 detail fetches).
-        // BambooHR and iCIMS are temporarily excluded — their parsers need rework.
         "LeverJobs",
         "AshbyJobs",
         "WorkdayJobs",
         "RecruiteeJobs",
+        "BambooHRJobs",
+        "iCIMSJobs",
         "GreenhouseJobs",
         // ── Free / unlimited API sources ────────────────────────────────────
-        // JSearch-backed sources (AllJobs, ContractJobs, H1BJobs, PrimeVendorJobs)
-        // are intentionally excluded — they share a rate-limited quota.
-        "AdzunaJobs",       // Adzuna — free
-        "GovernmentJobs",   // USAJobs.gov — free
-        "RemoteOkJobs",     // RemoteOK — free
-        "JobicyJobs",       // Jobicy — free
-        "RemotiveJobs",     // Remotive — free (contract/freelance friendly)
+        // JSearch (JSearchJobs) excluded — rate-limited quota, run manually.
+        "AdzunaJobs",         // Adzuna — free, broad sweep
+        "UsaJobs",            // USAJobs.gov — 2 sweeps: Government + University
+        "TheMuseJobs",        // The Muse — 2 sweeps: Startup + NonProfit
+        "RemoteOkJobs",       // RemoteOK — free
+        "JobicyJobs",         // Jobicy — free, geo=usa
+        "RemotiveJobs",       // Remotive — free, US-friendly filter
         "WeWorkRemotelyJobs", // WeWorkRemotely — free RSS
-        "StartupJobs",      // The Muse (company_size=Startup,Small) — free
-        "NonProfitJobs",    // The Muse (company_size=Non-Profit) — free
+        "ArbeitnowJobs",      // Arbeitnow — US+remote filter applied
         // ── Post-processing — runs after every fetch refreshes classification flags
         "ReclassifyExisting",
-        // H1B Sponsor Enrichment and Company Enrichment stay manual-only.
+        // H1BSponsorEnrichment and CompanyEnrichment stay manual-only.
     ];
 
     // Resolve handlers lazily (not via constructor) — injecting IEnumerable<IJobHandler>

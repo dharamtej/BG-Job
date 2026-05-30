@@ -253,7 +253,10 @@ public class JobFetchDAPostgres : IJobFetchDA
                 .SetProperty(c => c.AboutCompany, c => aboutCompany ?? c.AboutCompany)
                 .SetProperty(c => c.Website,      c => website      ?? c.Website)
                 .SetProperty(c => c.CareerPage,   c => careerPage   ?? c.CareerPage)
-                .SetProperty(c => c.LogoUrl,      c => logoUrl      ?? c.LogoUrl)
+                // Only write a new logo if it's a real one — never blank a real logo, never write a favicon.
+                .SetProperty(c => c.LogoUrl,      c => (logoUrl != null && !logoUrl.Contains("google.com/s2/favicons"))
+                                                        ? logoUrl
+                                                        : c.LogoUrl)
                 .SetProperty(c => c.UpdatedOn,    _ => DateTime.UtcNow),
             cancellationToken);
     }
@@ -286,10 +289,13 @@ public class JobFetchDAPostgres : IJobFetchDA
             .SetProperty(j => j.IsE3Visa,         job.IsE3Visa)
             .SetProperty(j => j.IsJ1Visa,         job.IsJ1Visa)
             .SetProperty(j => j.IsGreenCard,      job.IsGreenCard)
-            .SetProperty(j => j.IsStartupJob,     job.IsStartupJob)
-            .SetProperty(j => j.IsNonProfitJob,   job.IsNonProfitJob)
-            .SetProperty(j => j.IsUniversityJob,  job.IsUniversityJob)
-            .SetProperty(j => j.UpdatedOn,        DateTime.UtcNow),
+            .SetProperty(j => j.IsStartupJob,                    job.IsStartupJob)
+            .SetProperty(j => j.IsNonProfitJob,                  job.IsNonProfitJob)
+            .SetProperty(j => j.IsUniversityJob,                 job.IsUniversityJob)
+            .SetProperty(j => j.IsSecurityClearanceRequired,     job.IsSecurityClearanceRequired)
+            .SetProperty(j => j.IsVeteransEligible,             job.IsVeteransEligible)
+            .SetProperty(j => j.JobLevel,                       job.JobLevel)
+            .SetProperty(j => j.UpdatedOn,                      DateTime.UtcNow),
         cancellationToken);
     }
 
@@ -544,12 +550,21 @@ public class JobFetchDAPostgres : IJobFetchDA
         }
     }
 
+    // Returns true only for real logo URLs — not Google favicon fallbacks.
+    private static bool IsRealLogo(string? url) =>
+        !string.IsNullOrWhiteSpace(url) &&
+        !url.Contains("google.com/s2/favicons", StringComparison.OrdinalIgnoreCase);
+
     private static void EnrichCompany(ApiCompany company, ApiRawJob job)
     {
-        if (string.IsNullOrWhiteSpace(company.LogoUrl)      && !string.IsNullOrWhiteSpace(job.CompanyLogoUrl)) company.LogoUrl      = job.CompanyLogoUrl;
+        // Overwrite Google favicon placeholders with real logos from the source API.
+        if (!IsRealLogo(company.LogoUrl)     && IsRealLogo(job.CompanyLogoUrl))     company.LogoUrl      = job.CompanyLogoUrl;
         if (string.IsNullOrWhiteSpace(company.Website)      && !string.IsNullOrWhiteSpace(job.CompanyUrl))     company.Website      = job.CompanyUrl;
         if (string.IsNullOrWhiteSpace(company.CompanyType)  && !string.IsNullOrWhiteSpace(job.CompanyType))    company.CompanyType  = job.CompanyType;
         if (string.IsNullOrWhiteSpace(company.ApiCompanyId) && !string.IsNullOrWhiteSpace(job.ApiCompanyId))   company.ApiCompanyId = job.ApiCompanyId;
+        if (string.IsNullOrWhiteSpace(company.AboutCompany) && !string.IsNullOrWhiteSpace(job.CompanyAbout))   company.AboutCompany = job.CompanyAbout;
+        if (company.CompanySize == null                     && job.CompanySize.HasValue)                        company.CompanySize  = job.CompanySize;
+        if (string.IsNullOrWhiteSpace(company.CareerPage)   && !string.IsNullOrWhiteSpace(job.JobLink))        company.CareerPage   = job.JobLink;
         company.UpdatedOn = DateTime.UtcNow;
     }
 
@@ -558,6 +573,11 @@ public class JobFetchDAPostgres : IJobFetchDA
     {
         int inserted = 0, updated = 0, errors = 0;
         var batch = jobs as IList<ApiRawJob> ?? jobs.ToList();
+        if (batch.Count == 0) return (0, 0, 0);
+
+        // Exclude jobs with no description — without it the classifier cannot set any flags
+        // and the job provides no value to the platform. These count as skipped by the caller.
+        batch = batch.Where(j => !string.IsNullOrWhiteSpace(j.JobDescription)).ToList();
         if (batch.Count == 0) return (0, 0, 0);
 
         // Group by (Source, CompanyName) — each ATS handler typically sends one company per call,
@@ -740,9 +760,11 @@ public class JobFetchDAPostgres : IJobFetchDA
         dest.IsNonProfitJob    = src.IsNonProfitJob;
         dest.IsContractJob     = src.IsContractJob;
         dest.IsFreelanceJob    = src.IsFreelanceJob;
-        dest.IsPrimeVendor     = src.IsPrimeVendor;
-        dest.FetchRunId        = src.FetchRunId;
-        dest.Source            = src.Source;
+        dest.IsPrimeVendor                = src.IsPrimeVendor;
+        dest.IsSecurityClearanceRequired  = src.IsSecurityClearanceRequired;
+        dest.IsVeteransEligible           = src.IsVeteransEligible;
+        dest.FetchRunId                   = src.FetchRunId;
+        dest.Source                       = src.Source;
     }
 
     // ── H1B Sponsors ────────────────────────────────────────────────────────

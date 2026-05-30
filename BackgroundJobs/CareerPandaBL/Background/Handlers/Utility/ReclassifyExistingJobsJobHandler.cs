@@ -89,9 +89,15 @@ public class ReclassifyExistingJobsJobHandler : IJobHandler
                               oH1B = row.IsH1BSponsored, oSponsored = row.IsSponsored,
                               oOptCpt = row.IsOptCpt, oTn = row.IsTnVisa, oE3 = row.IsE3Visa,
                               oJ1 = row.IsJ1Visa, oGc = row.IsGreenCard,
-                              oStartup = row.IsStartupJob, oNonProfit = row.IsNonProfitJob, oUni = row.IsUniversityJob;
+                              oStartup = row.IsStartupJob, oNonProfit = row.IsNonProfitJob, oUni = row.IsUniversityJob,
+                              oClearance = row.IsSecurityClearanceRequired, oVet = row.IsVeteransEligible;
+                        var oLevel = row.JobLevel;
 
                         JobClassifier.ApplyKeywordFlags(row, row.JobDescription, employmentType: row.ContractType, companyName: row.CompanyName);
+
+                        // Normalize JobLevel to standard tier if not already in canonical form.
+                        var normalized = JobFetchHelpers.NormalizeJobLevel(row.JobLevel);
+                        if (normalized != null) row.JobLevel = normalized;
 
                         bool changed =
                             oC2C       != row.IsC2C            || oC2H      != row.IsContractToHire ||
@@ -100,9 +106,10 @@ public class ReclassifyExistingJobsJobHandler : IJobHandler
                             oStaff     != row.IsStaffing       || oH1B      != row.IsH1BSponsored ||
                             oSponsored != row.IsSponsored      || oOptCpt   != row.IsOptCpt ||
                             oTn        != row.IsTnVisa         || oE3       != row.IsE3Visa ||
-                            oJ1        != row.IsJ1Visa         || oGc       != row.IsGreenCard ||
+                            oJ1        != row.IsJ1Visa         || oGc        != row.IsGreenCard ||
                             oStartup   != row.IsStartupJob     || oNonProfit != row.IsNonProfitJob ||
-                            oUni       != row.IsUniversityJob;
+                            oUni       != row.IsUniversityJob  || oClearance != row.IsSecurityClearanceRequired ||
+                            oVet       != row.IsVeteransEligible || oLevel  != row.JobLevel;
 
                         if (!changed) return;
 

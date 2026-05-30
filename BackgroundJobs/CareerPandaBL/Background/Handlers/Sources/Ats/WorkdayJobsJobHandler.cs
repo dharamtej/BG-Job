@@ -15,6 +15,7 @@ using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 
 namespace CareerPanda.BL.Background.Handlers;
 
@@ -207,7 +208,7 @@ public class WorkdayJobsJobHandler : IJobHandler
             bool isH1B,
             CancellationToken ct)
     {
-        var results   = new List<ApiRawJob>();
+        var results   = new List<(ApiRawJob Job, string ExternalPath)>();
         int offset    = 0;
         int total     = int.MaxValue;
         short httpCode = 200;
@@ -269,8 +270,12 @@ public class WorkdayJobsJobHandler : IJobHandler
 
             foreach (var p in postings)
             {
-                var mapped = MapJob(p, token, fetchRunId, isH1B);
-                if (mapped != null) results.Add(mapped);
+                var externalPath = p.TryGetProperty("externalPath", out var ep) ? ep.GetString() : null;
+                if (string.IsNullOrEmpty(externalPath)) continue;
+
+                var mapped = MapJob(p, token, fetchRunId, isH1B, externalPath);
+                if (mapped != null)
+                    results.Add((mapped, externalPath));
             }
 
             offset += postings.Count;
@@ -280,105 +285,171 @@ public class WorkdayJobsJobHandler : IJobHandler
                 await Task.Delay(150, ct);
         }
 
-        return (results, httpCode, results.Count > 0 ? "VALID" : "EMPTY", results.Count);
+        // Enrich each job with description + ContractType from the detail endpoint
+        if (results.Count > 0)
+            await EnrichWithDescriptionsAsync(client, token, results, ct);
+
+        var jobs = results.Select(r => r.Job).ToList();
+        return (jobs, httpCode, jobs.Count > 0 ? "VALID" : "EMPTY", jobs.Count);
+    }
+
+    // ── Per-job description enrichment ────────────────────────────────────────
+    // Workday list endpoint has no description. Full content requires a GET to the detail endpoint.
+    // Detail URL = {api_url without /jobs}{externalPath}
+    // Response: jobPostingInfo.jobDescription (HTML), jobPostingInfo.timeType (ContractType)
+    // Max 3 concurrent calls per site to respect per-tenant rate limits.
+
+    private async Task EnrichWithDescriptionsAsync(
+        HttpClient client,
+        ApiWorkdayBoardToken token,
+        List<(ApiRawJob Job, string ExternalPath)> items,
+        CancellationToken ct)
+    {
+        // Build the base URL: strip "/jobs" from the end of apiUrl
+        var baseUrl = token.ApiUrl.TrimEnd('/');
+        if (baseUrl.EndsWith("/jobs", StringComparison.OrdinalIgnoreCase))
+            baseUrl = baseUrl[..^"/jobs".Length];
+
+        using var sem = new SemaphoreSlim(3, 3);
+        await Task.WhenAll(items.Select(async item =>
+        {
+            await sem.WaitAsync(ct);
+            try
+            {
+                // GET {base}{externalPath}
+                // e.g. https://9dot.wd503.myworkdayjobs.com/wday/cxs/9dot/skyrocket/job/City/Title_R12345
+                var detailUrl = baseUrl + item.ExternalPath;
+                using var resp = await client.GetAsync(detailUrl, ct);
+                if (!resp.IsSuccessStatusCode) return;
+
+                JsonElement detail;
+                try { detail = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+                catch { return; }
+
+                if (!detail.TryGetProperty("jobPostingInfo", out var jpi) || jpi.ValueKind != JsonValueKind.Object)
+                    return;
+
+                // ── Description (HTML → plain text) ──────────────────────────
+                if (jpi.TryGetProperty("jobDescription", out var jd) && jd.ValueKind == JsonValueKind.String)
+                {
+                    var html = jd.GetString();
+                    if (!string.IsNullOrWhiteSpace(html))
+                    {
+                        var plain = StripHtml(html);
+                        item.Job.JobDescription = plain;
+
+                        // Salary often embedded in description e.g. "$30.00 - $42.50 - Hourly"
+                        if (!item.Job.SalaryMin.HasValue)
+                        {
+                            var (salMin, salMax, salPeriod) = CareerPanda.DataAccess.Util.SalaryParser.Parse(plain);
+                            if (salMin.HasValue || salMax.HasValue)
+                            {
+                                item.Job.SalaryMin       = salMin;
+                                item.Job.SalaryMax       = salMax;
+                                item.Job.SalaryType      = salPeriod;
+                                item.Job.SalaryRangeText = BuildSalaryRangeText(salMin, salMax, salPeriod);
+                            }
+                        }
+                    }
+                }
+
+                // ── ContractType from timeType (only in detail) ───────────────
+                if (string.IsNullOrWhiteSpace(item.Job.ContractType) &&
+                    jpi.TryGetProperty("timeType", out var tt) && tt.ValueKind == JsonValueKind.String)
+                {
+                    var timeType = tt.GetString() ?? "";
+                    item.Job.ContractType = timeType.ToLowerInvariant() switch
+                    {
+                        var s when s.Contains("part")     => "PartTime",
+                        var s when s.Contains("intern")   => "Internship",
+                        var s when s.Contains("temp")     => "Temporary",
+                        var s when s.Contains("contract") => "Contract",
+                        _                                 => "FullTime"
+                    };
+                    item.Job.IsContractJob = item.Job.ContractType is "Contract" or "Temporary";
+                }
+
+                // ── Real company name from hiringOrganization ─────────────────
+                if (detail.TryGetProperty("hiringOrganization", out var org) &&
+                    org.ValueKind == JsonValueKind.Object &&
+                    org.TryGetProperty("name", out var orgName) &&
+                    orgName.ValueKind == JsonValueKind.String)
+                {
+                    var name = orgName.GetString();
+                    if (!string.IsNullOrWhiteSpace(name))
+                        item.Job.CompanyName = name;
+
+                    if (org.TryGetProperty("url", out var orgUrl) &&
+                        orgUrl.ValueKind == JsonValueKind.String &&
+                        !string.IsNullOrWhiteSpace(orgUrl.GetString()))
+                        item.Job.CompanyUrl = orgUrl.GetString();
+                }
+
+                // ── Country from structured field ─────────────────────────────
+                if (jpi.TryGetProperty("jobRequisitionLocation", out var reqLoc) &&
+                    reqLoc.ValueKind == JsonValueKind.Object &&
+                    reqLoc.TryGetProperty("country", out var reqCountry) &&
+                    reqCountry.ValueKind == JsonValueKind.Object &&
+                    reqCountry.TryGetProperty("alpha2Code", out var alpha2) &&
+                    alpha2.ValueKind == JsonValueKind.String)
+                {
+                    var code = alpha2.GetString();
+                    if (!string.IsNullOrWhiteSpace(code))
+                        item.Job.Country = code.ToUpperInvariant();
+                }
+
+                // ── City/State fallback if list locationsText gave nothing ─────
+                if (string.IsNullOrWhiteSpace(item.Job.City) &&
+                    jpi.TryGetProperty("location", out var locEl) &&
+                    locEl.ValueKind == JsonValueKind.String)
+                {
+                    var loc = locEl.GetString() ?? "";
+                    var parts = loc.Split(',', StringSplitOptions.TrimEntries);
+                    if (parts.Length >= 1) item.Job.City  = parts[0];
+                    if (parts.Length >= 2) item.Job.State = NormalizeState(parts[1]);
+                }
+
+                // ── PostDate fallback from startDate ──────────────────────────
+                if (!item.Job.PostDate.HasValue &&
+                    jpi.TryGetProperty("startDate", out var sd) &&
+                    sd.ValueKind == JsonValueKind.String &&
+                    DateTime.TryParse(sd.GetString(), out var startDt))
+                {
+                    item.Job.PostDate        = startDt.ToUniversalTime();
+                    item.Job.HoursBackPosted = (int)(DateTime.UtcNow - item.Job.PostDate.Value).TotalHours;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { /* best-effort — skip if detail unavailable */ }
+            finally { sem.Release(); }
+        }));
     }
 
     // ── Field mapping ─────────────────────────────────────────────────────────
 
-    private static ApiRawJob? MapJob(JsonElement d, ApiWorkdayBoardToken token, string fetchRunId, bool isH1B)
+    // externalPath passed in from the caller since it's already extracted before MapJob is called
+    private static ApiRawJob? MapJob(JsonElement d, ApiWorkdayBoardToken token, string fetchRunId, bool isH1B, string externalPath)
     {
-        // externalPath: "/en-US/site_id/job/Title/Job-Title_JOB-ID"
-        // The last segment is the job ID
-        var externalPath = d.TryGetProperty("externalPath", out var ep) ? ep.GetString() : null;
-        if (string.IsNullOrEmpty(externalPath)) return null;
-
+        // sourceId = last path segment: "Job-Title_R012345"
         var sourceId = externalPath.Split('/').LastOrDefault();
         if (string.IsNullOrEmpty(sourceId)) return null;
 
-        var title    = d.TryGetProperty("title", out var t) ? t.GetString() ?? "Untitled" : "Untitled";
-        var jobLink  = $"https://{token.CompanySlug}.{token.WdInstance}.myworkdayjobs.com{externalPath}";
+        var title   = d.TryGetProperty("title", out var t) ? t.GetString() ?? "Untitled" : "Untitled";
+        var jobLink = $"https://{token.CompanySlug}.{token.WdInstance}.myworkdayjobs.com{externalPath}";
 
         // ── Location ──────────────────────────────────────────────────────────
         var locText = d.TryGetProperty("locationsText", out var lt) ? lt.GetString() ?? "" : "";
         ParseLocation(locText, out var city, out var state, out var country, out var workType, out var jobWorkMode);
 
-        // Skip non-US jobs
-        // (Workday convention: an empty/null country is treated as US — ParseLocation
-        // initializes country="US" and only overwrites it for clearly-foreign strings.)
         if (!string.IsNullOrEmpty(country) && !UsLocationHelper.CountryVariants.Contains(country))
             return null;
 
-        // ── Description / H1B ────────────────────────────────────────────────
-        string? desc = null;
-        if (d.TryGetProperty("jobDescription", out var jd) && jd.ValueKind == JsonValueKind.Object
-            && jd.TryGetProperty("descriptor", out var jdd))
-            desc = jdd.GetString();
+        // ── Post date — "Posted 9 Days Ago" / "Posted Today" / "Posted Yesterday" ──
+        var postDate = ParseWorkdayPostedOn(
+            d.TryGetProperty("postedOn", out var po) ? po.GetString() : null);
 
-        var visaNegation = ContainsAny(desc,
-            "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
-            "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
-            "must be authorized to work", "must have work authorization",
-            "authorized to work in the us", "authorized to work in the united states");
-        var isH1BFinal  = !visaNegation && (isH1B ||
-            (desc != null && (desc.Contains("h1b", StringComparison.OrdinalIgnoreCase) ||
-                              desc.Contains("h-1b", StringComparison.OrdinalIgnoreCase) ||
-                              desc.Contains("visa sponsor", StringComparison.OrdinalIgnoreCase))));
-        var isOptCpt    = !visaNegation && ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
-        var isTnVisa    = !visaNegation && ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
-        var isE3Visa    = !visaNegation && ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
-        var isJ1Visa    = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
-        var isGreenCard = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
-
-        // ── Post date ─────────────────────────────────────────────────────────
-        DateTime? postDate = null;
-        if (d.TryGetProperty("postedOn", out var po) && po.ValueKind == JsonValueKind.String)
-        {
-            var raw = po.GetString();
-            if (!string.IsNullOrEmpty(raw) && DateTime.TryParse(raw, out var dt))
-                postDate = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
-        }
-
-        // ── Employment type ───────────────────────────────────────────────────
-        // Workday puts the employment type in the bulletFields array,
-        // e.g. ["Full Time"], ["Part Time"], ["Contract"], ["Intern"]
-        string contractType  = "FullTime";
-        bool isContract      = false;
-        bool isInternship    = false;
-        bool isFreelance     = false;
-
-        if (d.TryGetProperty("bulletFields", out var bullets) && bullets.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var b in bullets.EnumerateArray())
-            {
-                var val = b.GetString() ?? "";
-                if (val.Contains("Intern", StringComparison.OrdinalIgnoreCase))
-                    { contractType = "Internship"; isInternship = true; }
-                else if (val.Contains("Part Time", StringComparison.OrdinalIgnoreCase)
-                      || val.Contains("Part-Time", StringComparison.OrdinalIgnoreCase))
-                    contractType = "PartTime";
-                else if (val.Contains("Temporary", StringComparison.OrdinalIgnoreCase)
-                      || val.Contains("Temp ", StringComparison.OrdinalIgnoreCase))
-                    { contractType = "Temporary"; isContract = true; }
-                else if (val.Contains("Freelance", StringComparison.OrdinalIgnoreCase))
-                    { contractType = "Contract"; isContract = true; isFreelance = true; }
-                else if (val.Contains("Contract", StringComparison.OrdinalIgnoreCase))
-                    { contractType = "Contract"; isContract = true; }
-            }
-        }
-
-        // Also check employmentType field (present on some Workday tenants)
-        if (d.TryGetProperty("employmentType", out var et))
-        {
-            var emp = et.GetString() ?? "";
-            if (emp.Contains("Intern", StringComparison.OrdinalIgnoreCase))
-                { contractType = "Internship"; isInternship = true; }
-            else if (emp.Contains("Part", StringComparison.OrdinalIgnoreCase))
-                contractType = "PartTime";
-            else if (emp.Contains("Temporary", StringComparison.OrdinalIgnoreCase))
-                { contractType = "Temporary"; isContract = true; }
-            else if (emp.Contains("Contract", StringComparison.OrdinalIgnoreCase))
-                { contractType = "Contract"; isContract = true; }
-        }
+        // Description and ContractType come from the detail endpoint (EnrichWithDescriptionsAsync).
+        // Leave null here — jobs without description will be filtered by BulkUpsertRawJobsAsync.
 
         return new ApiRawJob
         {
@@ -388,7 +459,7 @@ public class WorkdayJobsJobHandler : IJobHandler
             FetchRunId      = fetchRunId,
             JobTitle        = title,
             JobLink         = jobLink,
-            JobDescription  = desc,
+            JobDescription  = null,   // filled by EnrichWithDescriptionsAsync
             City            = city,
             State           = state,
             Country         = country ?? "US",
@@ -401,33 +472,39 @@ public class WorkdayJobsJobHandler : IJobHandler
             SalaryCurrency  = "USD",
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            ContractType    = contractType,
+            ContractType    = null,   // filled by EnrichWithDescriptionsAsync from timeType
+            JobLevel        = NormalizeJobLevel(title),
             Industry        = token.Industry,
             Skills          = null,
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyUrl      = token.BoardUrl,
             CompanyType     = "Private",
-            IsH1BSponsored  = isH1BFinal,
-            IsOptCpt        = isOptCpt,
-            IsTnVisa        = isTnVisa,
-            IsE3Visa        = isE3Visa,
-            IsJ1Visa        = isJ1Visa,
-            IsGreenCard     = isGreenCard,
-            IsSponsored     = isH1BFinal || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
+            IsH1BSponsored  = isH1B,   // company-level; per-job negation applied after description loaded
             IsW2            = null,
             IsC2C           = false,
-            IsContractJob   = isContract,
-            IsFreelanceJob  = isFreelance,
+            IsContractJob   = false,
+            IsFreelanceJob  = false,
             IsPrimeVendor   = false,
             IsStaffing      = false,
             IsStartupJob    = false,
             IsNonProfitJob  = false,
-            IsUniversityJob = isInternship,
+            IsUniversityJob = false,
             Status          = true,
             CreatedOn       = DateTime.UtcNow,
             UpdatedOn       = DateTime.UtcNow
         };
+    }
+
+    // Parses Workday's relative date strings: "Posted 9 Days Ago", "Posted Today", etc.
+    private static DateTime? ParseWorkdayPostedOn(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (raw.Contains("Today",     StringComparison.OrdinalIgnoreCase)) return DateTime.UtcNow;
+        if (raw.Contains("Yesterday", StringComparison.OrdinalIgnoreCase)) return DateTime.UtcNow.AddDays(-1);
+        var m = System.Text.RegularExpressions.Regex.Match(raw, @"(\d+)\+?\s+Days?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var days)) return DateTime.UtcNow.AddDays(-days);
+        return null;
     }
 
     // ── Location parsing ──────────────────────────────────────────────────────

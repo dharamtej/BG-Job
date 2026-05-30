@@ -341,9 +341,10 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         var isGreenCard   = !h1bNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
         // Contract: specific job-context phrases; plain "contract" too broad
-        var isContract    = ContainsAny(desc, "contract position", "contract role", "contract to hire",
-                                "contract-to-hire", "c2h", "contract opportunity", "contract assignment",
-                                "contract work", "contract employee") ||
+        var isC2H         = ContainsAny(desc, "contract to hire", "contract-to-hire", "c2h",
+                                "right to hire", "right-to-hire", "temp to perm", "temp-to-perm");
+        var isContract    = isC2H || ContainsAny(desc, "contract position", "contract role",
+                                "contract opportunity", "contract assignment", "contract work", "contract employee") ||
                             (tags?.Any(x => x.Equals("contract", StringComparison.OrdinalIgnoreCase)) == true);
 
         // C2C / W2 / PrimeVendor: valid for US remote jobs on RemoteOK
@@ -388,7 +389,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             SalaryCurrency    = "USD",
             WorkType          = "Remote",
             JobWorkMode       = "Remote",
-            JobLevel          = jobLevel,
+            JobLevel          = NormalizeJobLevel(jobLevel),
             ContractType      = contractType,
             CompanyName       = companyName,
             CompanyLogoUrl    = logoUrl,
@@ -402,6 +403,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             IsGreenCard       = isGreenCard,
             IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
             IsContractJob     = isContract,
+            IsContractToHire  = isC2H,
             IsC2C             = isC2C,
             IsW2              = isW2,
             IsFreelanceJob    = isFreelance,

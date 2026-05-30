@@ -6,7 +6,9 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.DataAccess.Util;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -132,6 +134,15 @@ public class RemotiveJobsJobHandler : IJobHandler
         var company   = d.TryGetProperty("company_name", out var cn) ? cn.GetString() : null;
         var companyLg = d.TryGetProperty("company_logo_url", out var cl) ? cl.GetString() : null;
         var category  = d.TryGetProperty("category", out var cat) ? cat.GetString() : null;
+        var salaryRaw = d.TryGetProperty("salary", out var sal) && sal.ValueKind == JsonValueKind.String
+            ? sal.GetString() : null;
+        var (salMin, salMax, salPeriod) = SalaryParser.Parse(salaryRaw);
+        var salText = salaryRaw;
+        if (salMin.HasValue && salMax.HasValue)
+        {
+            var suffix = salPeriod switch { "Annual" => "/yr", "Monthly" => "/mo", "Hourly" => "/hr", "Weekly" => "/wk", _ => "" };
+            salText = $"${salMin:N0}–${salMax:N0}{suffix}";
+        }
 
         DateTime? postDate = null;
         if (d.TryGetProperty("publication_date", out var pd) && pd.ValueKind == JsonValueKind.String
@@ -179,11 +190,15 @@ public class RemotiveJobsJobHandler : IJobHandler
             Country         = "US",
             PostDate        = postDate,
             HoursBackPosted = postDate.HasValue ? (int)(DateTime.UtcNow - postDate.Value).TotalHours : null,
-            SalaryRangeText = d.TryGetProperty("salary", out var sal) && sal.ValueKind == JsonValueKind.String ? sal.GetString() : null,
+            SalaryMin       = salMin,
+            SalaryMax       = salMax,
+            SalaryType      = salPeriod,
+            SalaryRangeText = salText,
             SalaryCurrency  = "USD",
             WorkType        = "Remote",
             JobWorkMode     = "Remote",
             ContractType    = contractType,
+            JobLevel        = NormalizeJobLevel(title),
             Industry        = category,
             Skills          = skills,
             ApplyType       = "ExternalApply",
@@ -193,7 +208,7 @@ public class RemotiveJobsJobHandler : IJobHandler
             CompanyType     = "Private",
             IsContractJob   = isContract,
             IsFreelanceJob  = isFreelance,
-            IsUniversityJob = isIntern,
+            IsUniversityJob = false,
             IsW2            = null,
             IsC2C           = false,
             IsPrimeVendor   = false,

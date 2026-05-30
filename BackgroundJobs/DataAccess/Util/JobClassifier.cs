@@ -121,6 +121,13 @@ public static class JobClassifier
             Has(d, "visa sponsorship", " ead ")))
             job.IsSponsored = true;
 
+        // ── Security Clearance required
+        if (job.IsSecurityClearanceRequired != true && Has(d,
+            "security clearance", "secret clearance", "top secret", "ts/sci", "ts sci",
+            "public trust", "suitability clearance", "dod clearance", "government clearance",
+            "clearance required", "must have clearance", "active clearance"))
+            job.IsSecurityClearanceRequired = true;
+
         // ── Startup
         if (job.IsStartupJob != true && Has(d,
             "series a", "series b", "series c", "seed funded", "seed-stage",
@@ -130,6 +137,37 @@ public static class JobClassifier
         // ── Non-Profit
         if (job.IsNonProfitJob != true && Has(d, "nonprofit", "non-profit", "501(c)", "ngo", "charitable organization"))
             job.IsNonProfitJob = true;
+
+        // ── JobLevel fallback from job title when handler didn't populate it
+        if (string.IsNullOrWhiteSpace(job.JobLevel))
+        {
+            var title = job.JobTitle ?? "";
+            var tl    = title.ToLowerInvariant();
+            if (tl.Contains("intern") || tl.Contains("co-op") || tl.Contains("trainee") || tl.Contains("apprentice"))
+                job.JobLevel = "Entry";
+            else if (tl.Contains("junior") || tl.Contains("jr.") || tl.Contains(" jr ") || tl.Contains("associate ") || tl.Contains("entry level"))
+                job.JobLevel = "Entry";
+            else if (tl.Contains("principal") || tl.Contains("staff "))
+                job.JobLevel = "Lead";
+            else if (tl.StartsWith("lead ") || tl.Contains(" lead ") || tl.EndsWith(" lead"))
+                job.JobLevel = "Lead";
+            else if (tl.Contains("senior") || tl.Contains("sr.") || tl.Contains(" sr ") || tl.EndsWith(" sr"))
+                job.JobLevel = "Senior";
+            else if (tl.Contains("director") || tl.Contains("head of "))
+                job.JobLevel = "Director";
+            else if (tl.Contains(" vp") || tl.Contains("vice president") || tl.Contains("chief ") || tl.Contains("cto") || tl.Contains("cfo") || tl.Contains("ceo") || tl.Contains("coo"))
+                job.JobLevel = "Executive";
+            else if (tl.Contains("manager") || tl.Contains("supervisor"))
+                job.JobLevel = "Manager";
+        }
+
+        // ── Veterans eligible (preference or open announcement)
+        if (job.IsVeteransEligible != true && Has(d,
+            "veterans preference", "veteran preference", "veterans' preference",
+            "hiring preference for veterans", "veteran hiring", "vets-4212",
+            "disabled veteran", "service-disabled veteran", "military veteran",
+            "veteran status", "encourage veterans to apply"))
+            job.IsVeteransEligible = true;
     }
 
     private static bool Has(string? text, params string[] needles)

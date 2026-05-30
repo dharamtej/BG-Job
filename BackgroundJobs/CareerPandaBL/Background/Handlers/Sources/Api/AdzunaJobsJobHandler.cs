@@ -239,7 +239,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             loc.TryGetProperty("display_name", out var dn))
         {
             var parts = dn.GetString()?.Split(',');
-            if (parts?.Length >= 2) { city = parts[0].Trim(); state = parts[1].Trim(); }
+            if (parts?.Length >= 2) { city = parts[0].Trim(); state = NormalizeState(parts[1].Trim()); }
         }
 
         decimal? salMin = null, salMax = null;
@@ -261,6 +261,8 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         // ── Flag detection — applied to every job ─────────────────────────────
         var isContract    = contractType == "contract" ||
                             ContainsAny(desc, "contract", "contractor");
+        var isC2H         = ContainsAny(desc, "contract to hire", "contract-to-hire", "c2h",
+                                "right to hire", "right-to-hire", "temp to perm", "temp-to-perm");
 
         var isC2C         = ContainsAny(desc, "c2c", "corp to corp", "corp-to-corp");
         var isW2          = ContainsAny(desc, "w2", "w-2");
@@ -307,6 +309,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             SalaryRangeText   = salMin.HasValue && salMax.HasValue ? $"${salMin:N0}–${salMax:N0}/yr" : null,
             SalaryCurrency    = "USD",
             ContractType      = mappedContractType,
+            JobLevel          = NormalizeJobLevel(title),
             CompanyName       = companyName,
             Industry          = category,
             // ── All flags evaluated at insert time ────────────────────────────
@@ -318,6 +321,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
             IsGreenCard       = isGreenCard,
             IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard || ContainsAny(desc, "sponsor", "visa"),
             IsContractJob     = isContract,
+            IsContractToHire  = isC2H,
             IsC2C             = isC2C,
             IsW2              = isW2,
             IsFreelanceJob    = isFreelance,

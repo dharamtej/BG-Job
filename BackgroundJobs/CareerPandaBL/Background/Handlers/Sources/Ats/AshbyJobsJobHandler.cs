@@ -14,6 +14,7 @@ using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 
 namespace CareerPanda.BL.Background.Handlers;
 
@@ -473,7 +474,9 @@ public partial class AshbyJobsJobHandler : IJobHandler
             IsStaffing      = false,
             IsStartupJob    = false,
             IsNonProfitJob  = false,
-            IsUniversityJob = isInternship,
+            IsUniversityJob = false,
+            ContractType    = JobValidationGate.DeriveContractType(isContract, isInternship),
+            JobLevel        = NormalizeJobLevel(jobTitle),
             Status          = true,
             CreatedOn       = DateTime.UtcNow,
             UpdatedOn       = DateTime.UtcNow

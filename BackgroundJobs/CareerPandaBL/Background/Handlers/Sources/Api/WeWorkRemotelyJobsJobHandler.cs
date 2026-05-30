@@ -2,8 +2,11 @@
 // SOURCE : WeWorkRemotely public RSS feeds — https://weworkremotely.com/categories/{slug}.rss
 // AUTH   : Free, no key.
 // STRATEGY: pull each category RSS once, parse <item> blocks, upsert.
+using System.Net;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using CareerPanda.DataAccess.DA;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 using CareerPanda.DataAccess.Entities.Api;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -121,6 +124,16 @@ public class WeWorkRemotelyJobsJobHandler : IJobHandler
             $"WeWorkRemotely done — Fetched {totalFetched}, Inserted {totalInserted}, Updated {totalUpdated}, Errors {totalErrors}.");
     }
 
+    private static readonly Regex _htmlTag    = new(@"<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex _whitespace = new(@"\s{2,}", RegexOptions.Compiled);
+    private static string? StripHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var s = _htmlTag.Replace(html, " ");
+        s = WebUtility.HtmlDecode(s);
+        return _whitespace.Replace(s, " ").Trim();
+    }
+
     // ── RSS parsing ──────────────────────────────────────────────────────────
     // <item> fields: <title>, <link>, <guid>, <pubDate>, <description>(HTML), <category>
     private static List<ApiRawJob> ParseRss(string xml, string categorySlug, string fetchRunId)
@@ -162,13 +175,14 @@ public class WeWorkRemotelyJobsJobHandler : IJobHandler
                 FetchRunId      = fetchRunId,
                 JobTitle        = jobTitle,
                 JobLink         = link,
-                JobDescription  = desc,
+                JobDescription  = StripHtml(desc),
                 Country         = "US",
                 PostDate        = postDate,
                 HoursBackPosted = postDate.HasValue ? (int)(DateTime.UtcNow - postDate.Value).TotalHours : null,
                 WorkType        = "Remote",
                 JobWorkMode     = "Remote",
                 ContractType    = "FullTime",
+                JobLevel        = NormalizeJobLevel(jobTitle),
                 Industry        = categorySlug,
                 ApplyType       = "ExternalApply",
                 CompanyName     = company,

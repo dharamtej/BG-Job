@@ -155,18 +155,21 @@ builder.Services.AddSingleton<IBackgroundJobQueue>(sp =>
 builder.Services.AddSingleton<JobExecutionService>();
 builder.Services.AddSingleton<IJobHandler, DefaultJobHandler>();
 
-// ── Job Fetch Handlers (one per category) ─────────────────────────────────
-builder.Services.AddSingleton<IJobHandler, AllJobsJobHandler>();
+// ── Job Fetch Handlers — one per API provider ─────────────────────────────
+// JSearch (3 sweeps: broad + contractor + prime-vendor)
+builder.Services.AddSingleton<IJobHandler, JSearchJobsJobHandler>();
+// The Muse (2 sweeps: Startup,Small + Non-Profit)
+builder.Services.AddSingleton<IJobHandler, TheMuseJobsJobHandler>();
+// USAJobs (2 sweeps: government + university)
+builder.Services.AddSingleton<IJobHandler, UsaJobsJobHandler>();
+// Other API providers
 builder.Services.AddSingleton<IJobHandler, AdzunaJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, StartupJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, GovernmentJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, NonProfitJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, ContractJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, H1BJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, H1BSponsorEnrichmentJobHandler>();
-builder.Services.AddSingleton<IJobHandler, PrimeVendorJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RemoteOkJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, JobicyJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, RemotiveJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, WeWorkRemotelyJobsJobHandler>();     // Remote roles — public RSS
+builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>();          // US-filtered (remote + US country check)
+// ATS board handlers
 builder.Services.AddSingleton<IJobHandler, GreenhouseJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, LeverJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, WorkdayJobsJobHandler>();
@@ -174,12 +177,11 @@ builder.Services.AddSingleton<IJobHandler, AshbyJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, BambooHrJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, IcimsJobsJobHandler>();
 builder.Services.AddSingleton<IJobHandler, RecruiteeJobsJobHandler>();
-builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>(); // Meta: runs all fetch handlers sequentially
-builder.Services.AddSingleton<IJobHandler, CompanyEnrichmentJobHandler>(); // Enriches api.companies (logo/about/website/career page)
-builder.Services.AddSingleton<IJobHandler, ReclassifyExistingJobsJobHandler>(); // Backfills classification flags on existing raw_jobs
-builder.Services.AddSingleton<IJobHandler, RemotiveJobsJobHandler>();           // Remote contract / freelance / FTE — public JSON
-builder.Services.AddSingleton<IJobHandler, WeWorkRemotelyJobsJobHandler>();     // Remote roles — public RSS
-// builder.Services.AddSingleton<IJobHandler, ArbeitnowJobsJobHandler>(); // Disabled: European board, not US jobs
+// Post-processing / utility
+builder.Services.AddSingleton<IJobHandler, H1BSponsorEnrichmentJobHandler>();
+builder.Services.AddSingleton<IJobHandler, CompanyEnrichmentJobHandler>();
+builder.Services.AddSingleton<IJobHandler, ReclassifyExistingJobsJobHandler>();
+builder.Services.AddSingleton<IJobHandler, RunAllJobsJobHandler>();              // Meta: runs all fetch handlers sequentially
 builder.Services.AddHostedService<BackgroundJobWorker>();
 
 builder.Services.AddScoped<LoginBL>();

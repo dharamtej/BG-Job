@@ -190,7 +190,8 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
                     continue;
                 }
 
-                jobs.Add(MapJob(item, fetchRunId, sponsors, postDate));
+                var job = MapJob(item, fetchRunId, sponsors, postDate);
+                if (job != null) jobs.Add(job);
             }
             catch (Exception ex) { Logger.LogWarning(ex, "[Arbeitnow] Map failed for item"); }
         }
@@ -198,7 +199,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         return (jobs, hitCutoff);
     }
 
-    private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors, DateTime? postDate)
+    private ApiRawJob? MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors, DateTime? postDate)
     {
         var slug        = j.TryGetProperty("slug",         out var sl) ? sl.GetString()  : null;
         var title       = j.TryGetProperty("title",        out var t)  ? t.GetString()   : "Untitled";
@@ -226,14 +227,17 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         var isH1B         = visaSponsor ||
                             ContainsAny(desc, "h1b", "h-1b", "visa sponsor", "will sponsor") ||
                             (companyName != null && (sponsors.Contains(companyName) || sponsors.Contains(NormalizeCompanyName(companyName))));
-        // visa_sponsorship=true implies general sponsorship; also check desc for specific visa types
-        var isOptCpt      = visaSponsor || ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
-        var isTnVisa      = visaSponsor || ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
-        var isE3Visa      = visaSponsor || ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
+        // OPT/CPT/TN/E3 are US-specific visa types — only set from description keywords, not from
+        // the generic visa_sponsorship field (a European company sponsoring visas ≠ US OPT/TN eligible).
+        var isOptCpt      = ContainsAny(desc, " opt ", "opt/cpt", "stem opt", "opt extension", "f-1 visa", " cpt ");
+        var isTnVisa      = ContainsAny(desc, "tn visa", "tn-1", "tn-2", "usmca", "nafta visa");
+        var isE3Visa      = ContainsAny(desc, "e-3", "e3 visa", "e-3 visa");
         var isJ1Visa      = ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
         var isGreenCard   = ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
         var isContract    = ContainsAny(desc, "contract", "contractor") ||
                             jobTypesText.Contains("contract");
+        var isC2H         = ContainsAny(desc, "contract to hire", "contract-to-hire", "c2h",
+                                "right to hire", "right-to-hire", "temp to perm", "temp-to-perm");
         var isC2C         = ContainsAny(desc, "c2c", "corp to corp", "corp-to-corp");
         var isW2          = ContainsAny(desc, "w2", "w-2");
         var isFreelance   = ContainsAny(desc, "1099", "freelance", "independent contractor") ||
@@ -249,8 +253,17 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
                             ContainsAny(companyName, "foundation", "nonprofit", "non-profit");
 
         // Determine work mode
-        var workMode = isRemote ? "Remote" : "On-site";
-        var workType = isRemote ? "Remote" : (jobTypes?.FirstOrDefault() ?? "Full-time");
+        var workMode = isRemote ? "Remote" : "OnSite";
+        var workType = isRemote ? "Remote" : "OnSite";
+
+        // ContractType from job_types array — map to standard values
+        bool isPartTime   = jobTypesText.Contains("part") || jobTypesText.Contains("part-time");
+        bool isInternship = jobTypesText.Contains("intern") || ContainsAny(title, "intern");
+        string? contractType = isInternship ? "Internship"
+            : isContract    ? "Contract"
+            : isPartTime    ? "PartTime"
+            : jobTypes != null && jobTypes.Length > 0 ? "FullTime"   // explicit type known, assume FT
+            : null;  // no type info at all
 
         // Parse location parts
         string? city = null, state = null, country = null;
@@ -268,6 +281,15 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
                 country = parts[0];
             }
         }
+
+        // Reject jobs with an explicitly non-US country.
+        // Remote jobs (country = null) are kept — they're worldwide-eligible remote positions.
+        if (country != null && !UsLocationHelper.CountryVariants.Contains(country) && !isRemote)
+            return null;
+
+        // Normalize country to "US" when it matches a US variant (e.g. "United States", "U.S.A.")
+        if (country != null && UsLocationHelper.CountryVariants.Contains(country))
+            country = "US";
 
         return new ApiRawJob
         {
@@ -289,6 +311,8 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
             SalaryCurrency    = null,
             WorkType          = workType,
             JobWorkMode       = workMode,
+            ContractType      = contractType,
+            JobLevel          = NormalizeJobLevel(title),
             CompanyName       = companyName,
             CompanyLogoUrl    = null,
             Skills            = skills,
@@ -301,6 +325,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
             IsGreenCard       = isGreenCard,
             IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard || ContainsAny(desc, "sponsor", "visa"),
             IsContractJob     = isContract,
+            IsContractToHire  = isC2H,
             IsC2C             = isC2C,
             IsW2              = isW2,
             IsFreelanceJob    = isFreelance,

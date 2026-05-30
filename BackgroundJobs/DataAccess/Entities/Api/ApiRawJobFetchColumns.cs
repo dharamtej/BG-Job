@@ -66,6 +66,14 @@ public partial class ApiRawJob
     [Column("company_type")]
     public string CompanyType { get; set; }
 
+    /// <summary>Short company description from the source API (not stored in raw_jobs — passed to api.companies).</summary>
+    [NotMapped]
+    public string? CompanyAbout { get; set; }
+
+    /// <summary>Employee count or size category from source API (not stored in raw_jobs — passed to api.companies).</summary>
+    [NotMapped]
+    public int? CompanySize { get; set; }
+
     // ── Poster / recruiter info ──────────────────────────────────────────────
     /// <summary>Full name of the recruiter / hiring manager who posted the job.</summary>
     [Column("posted_by_name")]
@@ -133,4 +141,12 @@ public partial class ApiRawJob
     /// <summary>Green Card / Permanent Residency sponsorship (PERM / EB-2 / EB-3).</summary>
     [Column("is_green_card")]
     public bool? IsGreenCard { get; set; }
+
+    /// <summary>Job requires a US government security clearance (Secret, TS/SCI, Public Trust, etc.).</summary>
+    [Column("is_security_clearance_required")]
+    public bool? IsSecurityClearanceRequired { get; set; }
+
+    /// <summary>Job is open to veterans / has veteran hiring preference (USAJobs HiringPath "veterans").</summary>
+    [Column("is_veterans_eligible")]
+    public bool? IsVeteransEligible { get; set; }
 }

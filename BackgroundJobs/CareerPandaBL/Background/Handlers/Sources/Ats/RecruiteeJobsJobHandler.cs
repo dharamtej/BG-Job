@@ -14,6 +14,7 @@ using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 
 namespace CareerPanda.BL.Background.Handlers;
 
@@ -371,10 +372,7 @@ public class RecruiteeJobsJobHandler : IJobHandler
                     _ => null
                 };
             }
-            if (salMin.HasValue && salMax.HasValue)
-                salRangeText = salType == "Hourly"
-                    ? $"${salMin:N0}–${salMax:N0}/hr"
-                    : $"${salMin:N0}–${salMax:N0}/yr";
+            salRangeText = BuildSalaryRangeText(salMin, salMax, salType);
         }
 
         // ── Department / category as skills proxy ─────────────────────────────
@@ -424,6 +422,7 @@ public class RecruiteeJobsJobHandler : IJobHandler
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
             ContractType    = contractType,
+            JobLevel        = NormalizeJobLevel(jobTitle),
             Industry        = token.Industry ?? department ?? category,
             Skills          = skills,
             ApplyType       = "ExternalApply",

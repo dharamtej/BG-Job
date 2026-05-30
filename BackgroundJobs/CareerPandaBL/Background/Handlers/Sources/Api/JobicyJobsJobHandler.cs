@@ -227,7 +227,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         var geoRaw      = j.TryGetProperty("jobGeo",         out var geo) ? geo.GetString()  : null;
         var pubDateStr  = j.TryGetProperty("pubDate",        out var pd)  ? pd.GetString()   : null;
         var jobLevel    = j.TryGetProperty("jobLevel",       out var jl)  ? jl.GetString()   : null;
-        var salaryPeriod = j.TryGetProperty("salaryPeriod",  out var sp)  ? sp.GetString()   : null;
+        var salaryPeriod = NormalizeSalaryPeriod(j.TryGetProperty("salaryPeriod", out var sp) ? sp.GetString() : null);
 
         var fullText = string.Concat(desc, " ", excerpt);
 
@@ -280,6 +280,8 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
 
         // Contract / Freelance: driven by Jobicy's jobType[] field — most accurate signal available
         var isContract    = contractType?.Contains("contract", StringComparison.OrdinalIgnoreCase) == true;
+        var isC2H         = ContainsAny(fullText, "contract to hire", "contract-to-hire", "c2h",
+                                "right to hire", "right-to-hire", "temp to perm", "temp-to-perm");
         var isFreelance   = contractType?.Contains("freelance", StringComparison.OrdinalIgnoreCase) == true;
 
         // C2C / PrimeVendor / W2: US staffing-market terms not typical of Jobicy direct-employer posts
@@ -317,13 +319,13 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             HoursBackPosted   = ParseHoursBack(postDate),
             SalaryMin         = salMin,
             SalaryMax         = salMax,
-            SalaryRangeText   = salMin.HasValue && salMax.HasValue ? $"${salMin:N0}–${salMax:N0}/yr" : null,
+            SalaryRangeText   = BuildSalaryRangeText(salMin, salMax, salaryPeriod),
             SalaryCurrency    = salaryCurrency,
             SalaryType        = salaryPeriod,
             WorkType          = "Remote",
             JobWorkMode       = "Remote",
             ContractType      = contractType,
-            JobLevel          = jobLevel,
+            JobLevel          = NormalizeJobLevel(jobLevel),
             Industry          = industryText,
             CompanyName       = companyName,
             CompanyLogoUrl    = logoUrl,
@@ -336,6 +338,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
             IsGreenCard       = isGreenCard,
             IsSponsored       = isH1B || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard || ContainsAny(fullText, "sponsor", "visa"),
             IsContractJob     = isContract,
+            IsContractToHire  = isC2H,
             IsC2C             = isC2C,
             IsW2              = isW2,
             IsFreelanceJob    = isFreelance,

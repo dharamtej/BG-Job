@@ -11,10 +11,11 @@
 //        sitelinks.enwiki.title        → exact Wikipedia article title
 //   2. Wikipedia summary (by enwiki title or company name) → about_company
 //      extract + thumbnail (fallback logo).
-//   3. Domain discovery for the favicon fallback:
+//   3. Domain discovery:
 //        existing company.Website  →  raw_jobs.company_url (ATS hosts filtered)
 //                                  →  Clearbit autocomplete  →  Wikidata P856
-//   4. logo_url     = wikidata logo || wikipedia thumbnail || google favicon(domain, sz=256)
+//   4. Brandfetch (by domain) → real SVG/PNG logo + description fallback
+//   5. logo_url     = wikidata logo || wikipedia thumbnail || brandfetch logo  (NO favicon)
 //      website      = https://{domain} when discovered
 //      career_page  = raw_jobs.company_url for this company (the apply/board URL)
 //      company_size = Wikidata P1128 (latest)
@@ -24,6 +25,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -49,9 +51,16 @@ public class CompanyEnrichmentJobHandler : IJobHandler
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CompanyEnrichmentJobHandler> _logger;
+    private readonly string? _brandfetchApiKey;
 
-    public CompanyEnrichmentJobHandler(IServiceScopeFactory scopeFactory, IHttpClientFactory httpClientFactory, ILogger<CompanyEnrichmentJobHandler> logger)
-    { _scopeFactory = scopeFactory; _http = httpClientFactory; _logger = logger; }
+    public CompanyEnrichmentJobHandler(IServiceScopeFactory scopeFactory, IHttpClientFactory httpClientFactory,
+        ILogger<CompanyEnrichmentJobHandler> logger, IConfiguration configuration)
+    {
+        _scopeFactory      = scopeFactory;
+        _http              = httpClientFactory;
+        _logger            = logger;
+        _brandfetchApiKey  = configuration["JobApiSettings:BrandfetchApiKey"];
+    }
 
     private sealed record Input(int BatchSize, int MaxParallel);
     private static Input ParseInput(string? payload)
@@ -70,6 +79,7 @@ public class CompanyEnrichmentJobHandler : IJobHandler
     }
 
     private sealed record WikidataInfo(string? Website, string? LogoUrl, int? Employees, string? EnwikiTitle);
+    private sealed record BrandfetchInfo(string? LogoUrl, string? Description);
 
     public async Task ExecuteAsync(JobWorkRequest request, IJobProgressReporter progress, CancellationToken cancellationToken)
     {
@@ -125,7 +135,7 @@ public class CompanyEnrichmentJobHandler : IJobHandler
                     // 2) Wikipedia summary — about + thumbnail. Use the enwiki title when known.
                     var (about, thumb) = await WikipediaAsync(http, wd.EnwikiTitle ?? company.CompanyName, ct);
 
-                    // 3) Domain chain — for the favicon fallback and `website`.
+                    // 3) Domain chain — for Brandfetch and website.
                     string? domain = ExtractDomain(company.Website)
                                      ?? ExtractDomain(wd.Website);
                     if (domain == null)
@@ -137,10 +147,13 @@ public class CompanyEnrichmentJobHandler : IJobHandler
                     }
                     if (domain == null) domain = await ClearbitDomainAsync(http, company.CompanyName, ct);
 
-                    // 4) Final field values
-                    string? logoUrl = wd.LogoUrl ?? thumb;
-                    if (logoUrl == null && domain != null)
-                        logoUrl = $"https://www.google.com/s2/favicons?domain={Uri.EscapeDataString(domain)}&sz=256";
+                    // 4) Brandfetch — real SVG/PNG logo by domain (free tier, no favicon junk)
+                    BrandfetchInfo bf = new(null, null);
+                    if (domain != null) bf = await BrandfetchAsync(http, domain, ct);
+
+                    // 5) Final field values — NO favicon fallback; null is better than blurry 16×16
+                    string? logoUrl = wd.LogoUrl ?? thumb ?? bf.LogoUrl;
+                    if (about == null && bf.Description != null) about = bf.Description;
 
                     var website = domain != null ? $"https://{domain}" : null;
                     int?   size = wd.Employees;
@@ -348,6 +361,59 @@ public class CompanyEnrichmentJobHandler : IJobHandler
         }
         catch (Exception ex) { _logger.LogDebug(ex, "[CompanyEnrich] Clearbit domain lookup failed for {Name}", name); }
         return null;
+    }
+
+    // ── Brandfetch: real logo by domain (phase-2 fallback) ───────────────────
+    // Free tier: 10K requests/month. Requires API key in JobApiSettings:BrandfetchApiKey.
+    // Response shape: { logos: [{ type: "logo"|"icon", formats: [{ src, format }] }], description }
+    private async Task<BrandfetchInfo> BrandfetchAsync(HttpClient http, string domain, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_brandfetchApiKey)) return new(null, null);
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"https://api.brandfetch.io/v2/brands/{Uri.EscapeDataString(domain)}");
+            req.Headers.Add("Authorization", $"Bearer {_brandfetchApiKey}");
+            using var resp = await http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode) return new(null, null);
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+
+            // Prefer "logo" type over "icon"; prefer SVG, then PNG
+            string? logoUrl = null;
+            if (json.TryGetProperty("logos", out var logos) && logos.ValueKind == JsonValueKind.Array)
+            {
+                // Two passes: first "logo" type, then "icon" as fallback
+                foreach (var preferredType in new[] { "logo", "icon" })
+                {
+                    foreach (var logo in logos.EnumerateArray())
+                    {
+                        var logoType = logo.TryGetProperty("type", out var lt) ? lt.GetString() : null;
+                        if (!string.Equals(logoType, preferredType, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!logo.TryGetProperty("formats", out var fmts) || fmts.ValueKind != JsonValueKind.Array) continue;
+
+                        string? svgUrl = null, pngUrl = null;
+                        foreach (var fmt in fmts.EnumerateArray())
+                        {
+                            var src    = fmt.TryGetProperty("src",    out var s) ? s.GetString() : null;
+                            var format = fmt.TryGetProperty("format", out var f) ? f.GetString() : null;
+                            if (string.IsNullOrWhiteSpace(src)) continue;
+                            if (format == "svg") svgUrl = src;
+                            else if (format == "png" && pngUrl == null) pngUrl = src;
+                        }
+                        logoUrl = svgUrl ?? pngUrl;
+                        if (logoUrl != null) break;
+                    }
+                    if (logoUrl != null) break;
+                }
+            }
+
+            string? description = null;
+            if (json.TryGetProperty("description", out var desc) && desc.ValueKind == JsonValueKind.String)
+                description = desc.GetString();
+
+            return new(logoUrl, description);
+        }
+        catch (Exception ex) { _logger.LogDebug(ex, "[CompanyEnrich] Brandfetch failed for {Domain}", domain); return new(null, null); }
     }
 
     // ── Extract a real company domain, skipping ATS aggregator hosts ─────────

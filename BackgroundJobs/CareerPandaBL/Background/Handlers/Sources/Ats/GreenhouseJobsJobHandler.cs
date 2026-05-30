@@ -15,6 +15,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
+
 namespace CareerPanda.BL.Background.Handlers;
 
 public partial class GreenhouseJobsJobHandler : IJobHandler
@@ -346,6 +348,18 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         var isJ1Visa    = !visaNegation && ContainsAny(desc, "j-1", "j1 visa", "j-1 visa", "exchange visitor");
         var isGreenCard = !visaNegation && ContainsAny(desc, "green card", "gc sponsor", "perm filing", "eb-2", "eb-3", "labor certification");
 
+        // ── Employment type (Greenhouse API has no field — derive from title + description) ──
+        bool isContract   = ContainsAny(desc,   "contract role", "contract position", "contractor", " on contract") ||
+                            ContainsAny(jobTitle, "contract", "contractor");
+        bool isInternship = ContainsAny(desc,   "internship", "intern role", "intern position") ||
+                            ContainsAny(jobTitle, "intern");
+        bool isPartTime   = ContainsAny(desc,   "part-time", "part time") ||
+                            ContainsAny(jobTitle, "part-time", "part time");
+        // Only set ContractType when we have a positive signal — do not default to FullTime
+        string? contractType = (isContract || isInternship || isPartTime)
+            ? JobValidationGate.DeriveContractType(isContract, isInternship, isPartTime)
+            : null;
+
         // ── Salary ────────────────────────────────────────────────────────────
         decimal? salMin = null, salMax = null;
         string? salCurrency = "USD", salType = null, salRangeText = null;
@@ -405,12 +419,14 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             IsJ1Visa        = isJ1Visa,
             IsGreenCard     = isGreenCard,
             IsSponsored     = isH1BFinal || isOptCpt || isTnVisa || isE3Visa || isJ1Visa || isGreenCard,
-            IsW2            = null,   // unknown — Greenhouse API doesn't expose employment type
+            IsW2            = null,
             IsC2C           = false,
-            IsContractJob   = false,
+            IsContractJob   = isContract,
             IsFreelanceJob  = false,
             IsPrimeVendor   = false,
             IsStaffing      = false,
+            ContractType    = contractType,
+            JobLevel        = NormalizeJobLevel(jobTitle),
             IsStartupJob    = false,
             IsNonProfitJob  = false,
             IsUniversityJob = false,

@@ -3,7 +3,7 @@
 // A handler's MapJob should return null when this gate rejects the row.
 //
 // Rules (drop the row if ANY is violated):
-//   - Source, SourceId, JobTitle, JobLink, CompanyName must all be non-empty
+//   - Source, SourceId, JobTitle, JobLink, CompanyName, JobDescription must all be non-empty
 //   - Country must resolve to US (or recognized US state)
 //   - WorkType must be one of {OnSite, Remote, Hybrid}
 //   - ContractType must be one of {FullTime, PartTime, Contract, Temporary, Internship}
@@ -27,11 +27,12 @@ internal static class JobValidationGate
     // Returns true if the job should be stored; false (with reason) otherwise.
     public static bool TryAccept(ApiRawJob job, out string? rejectReason)
     {
-        if (string.IsNullOrWhiteSpace(job.Source))       { rejectReason = "Source missing";       return false; }
-        if (string.IsNullOrWhiteSpace(job.SourceId))     { rejectReason = "SourceId missing";     return false; }
-        if (string.IsNullOrWhiteSpace(job.JobTitle))     { rejectReason = "JobTitle missing";     return false; }
-        if (string.IsNullOrWhiteSpace(job.JobLink))      { rejectReason = "JobLink missing";      return false; }
-        if (string.IsNullOrWhiteSpace(job.CompanyName))  { rejectReason = "CompanyName missing";  return false; }
+        if (string.IsNullOrWhiteSpace(job.Source))          { rejectReason = "Source missing";          return false; }
+        if (string.IsNullOrWhiteSpace(job.SourceId))        { rejectReason = "SourceId missing";        return false; }
+        if (string.IsNullOrWhiteSpace(job.JobTitle))        { rejectReason = "JobTitle missing";        return false; }
+        if (string.IsNullOrWhiteSpace(job.JobLink))         { rejectReason = "JobLink missing";         return false; }
+        if (string.IsNullOrWhiteSpace(job.CompanyName))     { rejectReason = "CompanyName missing";     return false; }
+        if (string.IsNullOrWhiteSpace(job.JobDescription))  { rejectReason = "JobDescription missing";  return false; }
 
         // Country must resolve to US — either explicit "US" or recognized US state/country variant
         if (!UsLocationHelper.IsUs(job.Country, job.State)

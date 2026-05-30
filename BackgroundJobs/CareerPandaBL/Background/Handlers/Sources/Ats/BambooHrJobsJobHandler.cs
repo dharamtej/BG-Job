@@ -1,13 +1,15 @@
 // CareerPandaBL/Background/Handlers/BambooHrJobsJobHandler.cs
 // SOURCE : BambooHR Public Careers API (no auth required)
 // FLOW   : Load board tokens from api.bamboohr_board_tokens (status != INVALID)
-//          → GET https://{slug}.bamboohr.com/careers/list  (full list in one call)
+//          → GET https://{slug}.bamboohr.com/careers/list         (full list in one call)
+//          → GET https://{slug}.bamboohr.com/careers/{id}         (detail per job, max 3 concurrent)
 //          → Update token status (VALID / EMPTY / INVALID)
 //          → Upsert into api.raw_jobs (US-only)
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
+using static CareerPanda.BL.Background.Handlers.JobFetchHelpers;
 using CareerPanda.DataAccess.Entities.Api;
 using CareerPanda.Framework.Cache;
 using Microsoft.Extensions.Configuration;
@@ -199,8 +201,8 @@ public class BambooHrJobsJobHandler : IJobHandler
             bool isH1B,
             CancellationToken ct)
     {
-        var url = $"https://{token.BoardToken}.bamboohr.com/careers/list";
-        using var resp = await client.GetAsync(url, ct);
+        var listUrl = $"https://{token.BoardToken}.bamboohr.com/careers/list";
+        using var resp = await client.GetAsync(listUrl, ct);
         var httpCode = (short)resp.StatusCode;
 
         if (!resp.IsSuccessStatusCode)
@@ -220,14 +222,8 @@ public class BambooHrJobsJobHandler : IJobHandler
         }
 
         JsonElement doc;
-        try
-        {
-            doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-        }
-        catch
-        {
-            return ([], httpCode, "INVALID", 0);
-        }
+        try { doc = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+        catch { return ([], httpCode, "INVALID", 0); }
 
         if (doc.ValueKind != JsonValueKind.Object
             || !doc.TryGetProperty("result", out var resultEl)
@@ -245,7 +241,50 @@ public class BambooHrJobsJobHandler : IJobHandler
             if (mapped != null) results.Add(mapped);
         }
 
+        // Enrich each job with description from the detail endpoint (max 3 concurrent per company).
+        if (results.Count > 0)
+            await EnrichWithDescriptionsAsync(client, token.BoardToken, results, ct);
+
         return (results, httpCode, results.Count > 0 ? "VALID" : "EMPTY", jobArray.Count);
+    }
+
+    // Fetches the detail page for each job and fills JobDescription from the response.
+    // Max 3 concurrent requests per company; 4xx detail failures are silently skipped.
+    private async Task EnrichWithDescriptionsAsync(
+        HttpClient client, string boardToken, List<ApiRawJob> jobs, CancellationToken ct)
+    {
+        using var sem = new SemaphoreSlim(3, 3);
+
+        await Task.WhenAll(jobs.Select(async job =>
+        {
+            if (string.IsNullOrEmpty(job.SourceId)) return;
+            await sem.WaitAsync(ct);
+            try
+            {
+                var detailUrl = $"https://{boardToken}.bamboohr.com/careers/{job.SourceId}";
+                using var r = await client.GetAsync(detailUrl, ct);
+                if (!r.IsSuccessStatusCode) return;
+
+                JsonElement detail;
+                try { detail = await r.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct); }
+                catch { return; }
+
+                // BambooHR detail response has top-level "description" and "requirements" strings
+                var desc = detail.TryGetProperty("description",  out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : null;
+                var req  = detail.TryGetProperty("requirements", out var rq) && rq.ValueKind == JsonValueKind.String ? rq.GetString() : null;
+
+                // Fields may contain HTML — strip tags so classifier works on plain text
+                var descClean = JobFetchHelpers.StripHtml(desc);
+                var reqClean  = JobFetchHelpers.StripHtml(req);
+
+                job.JobDescription = string.IsNullOrWhiteSpace(descClean) ? reqClean :
+                                     string.IsNullOrWhiteSpace(reqClean)  ? descClean :
+                                     $"{descClean}\n\n{reqClean}";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { /* detail fetch is best-effort */ }
+            finally { sem.Release(); }
+        }));
     }
 
     // ── Field mapping ─────────────────────────────────────────────────────────
@@ -339,7 +378,7 @@ public class BambooHrJobsJobHandler : IJobHandler
             FetchRunId      = fetchRunId,
             JobTitle        = jobTitle,
             JobLink         = jobLink,
-            JobDescription  = null,   // BambooHR list endpoint doesn't include descriptions
+            JobDescription  = null,   // filled by EnrichWithDescriptionsAsync after list fetch
             City            = city,
             State           = state,
             Country         = country,
@@ -373,7 +412,9 @@ public class BambooHrJobsJobHandler : IJobHandler
             IsStaffing      = false,
             IsStartupJob    = false,
             IsNonProfitJob  = false,
-            IsUniversityJob = isInternship,
+            IsUniversityJob = false,
+            ContractType    = JobValidationGate.DeriveContractType(isContract, isInternship),
+            JobLevel        = NormalizeJobLevel(jobTitle),
             Status          = true,
             CreatedOn       = DateTime.UtcNow,
             UpdatedOn       = DateTime.UtcNow
