@@ -13,7 +13,7 @@
 -- 'manual'    = manually assigned via admin
 -- 'failed'    = could not match after all strategies
 ALTER TABLE api.raw_jobs
-    ADD COLUMN IF NOT EXISTS norm_status TEXT NOT NULL DEFAULT 'pending';
+    ADD COLUMN IF NOT EXISTS norm_status TEXT DEFAULT 'pending';
 
 -- Index so the handler can page through unprocessed rows fast.
 CREATE INDEX IF NOT EXISTS ix_raw_jobs_norm_status

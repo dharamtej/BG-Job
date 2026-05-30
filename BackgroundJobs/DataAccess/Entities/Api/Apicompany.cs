@@ -46,7 +46,7 @@ public partial class ApiCompany
     public DateTime? UpdatedOn { get; set; }
 
     [Column("industry_id")]
-    public long? IndustryId { get; set; }
+    public int? IndustryId { get; set; }
 
     [Column("image_urls")]
     public string[]? ImageUrls { get; set; }

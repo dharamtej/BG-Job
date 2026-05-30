@@ -465,8 +465,9 @@ public class JobFetchDAPostgres : IJobFetchDA
             // INSERT
             if (string.IsNullOrWhiteSpace(job.PublicId))
                 job.PublicId = Guid.NewGuid().ToString("N");
-            job.CreatedOn = DateTime.UtcNow;
-            job.UpdatedOn = DateTime.UtcNow;
+            job.CreatedOn  = DateTime.UtcNow;
+            job.UpdatedOn  = DateTime.UtcNow;
+            job.NormStatus = "pending";
             _db.RawJobs.Add(job);
             try
             {
@@ -658,8 +659,9 @@ public class JobFetchDAPostgres : IJobFetchDA
                     {
                         if (string.IsNullOrWhiteSpace(job.PublicId))
                             job.PublicId = Guid.NewGuid().ToString("N");
-                        job.CreatedOn = DateTime.UtcNow;
-                        job.UpdatedOn = DateTime.UtcNow;
+                        job.CreatedOn  = DateTime.UtcNow;
+                        job.UpdatedOn  = DateTime.UtcNow;
+                        job.NormStatus = "pending";
                         toAdd.Add(job);
                         batchInserted++;
                     }
