@@ -347,7 +347,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
             ExperienceMax     = expMonths.HasValue ? (expMonths / 12) + 2 : null,
             WorkType          = isRemote ? "Remote" : "OnSite",
             JobWorkMode       = isRemote ? "Remote" : "OnSite",
-            ContractType      = empType switch { "FULLTIME" => "FullTime", "PARTTIME" => "PartTime", "CONTRACTOR" => "Contract", "INTERN" => "Internship", _ => null },
+            ContractType      = empType switch { "FULLTIME" => "FullTime", "PARTTIME" => "PartTime", "CONTRACTOR" => "Contract", "INTERN" => "Internship", _ => "FullTime" },
             JobLevel          = NormalizeJobLevel(j.TryGetProperty("job_title", out var jt2) ? jt2.GetString() : null),
             ApplyType         = isDirect ? "DirectApply" : "ExternalApply",
             EasyApply         = isDirect,

@@ -130,7 +130,7 @@ public class RemotiveJobsJobHandler : IJobHandler
 
         var title = d.TryGetProperty("title", out var t) ? t.GetString() ?? "Untitled" : "Untitled";
         var url   = d.TryGetProperty("url",   out var u) ? u.GetString() : null;
-        var desc  = d.TryGetProperty("description", out var dEl) ? dEl.GetString() : null;
+        var desc  = d.TryGetProperty("description", out var dEl) ? StripHtml(dEl.GetString()) : null;
         var company   = d.TryGetProperty("company_name", out var cn) ? cn.GetString() : null;
         var companyLg = d.TryGetProperty("company_logo_url", out var cl) ? cl.GetString() : null;
         var category  = d.TryGetProperty("category", out var cat) ? cat.GetString() : null;

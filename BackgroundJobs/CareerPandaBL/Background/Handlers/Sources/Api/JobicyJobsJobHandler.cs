@@ -220,7 +220,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         var sourceId    = j.TryGetProperty("id",             out var id)  ? id.GetRawText()  : null;
         var title       = j.TryGetProperty("jobTitle",       out var t)   ? t.GetString()    : "Untitled";
         var companyName = j.TryGetProperty("companyName",    out var co)  ? co.GetString()   : null;
-        var desc        = j.TryGetProperty("jobDescription", out var d)   ? d.GetString()    : null;
+        var desc        = j.TryGetProperty("jobDescription", out var d)   ? StripHtml(d.GetString())    : null;
         var excerpt     = j.TryGetProperty("jobExcerpt",     out var ex)  ? ex.GetString()   : null;
         var applyUrl    = j.TryGetProperty("url",            out var u)   ? u.GetString()    : null;
         var logoUrl     = j.TryGetProperty("companyLogo",    out var lg)  ? lg.GetString()   : null;
@@ -240,11 +240,20 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         if (j.TryGetProperty("salaryMax", out var sx) && sx.ValueKind == JsonValueKind.Number && sx.GetDecimal() > 0) salMax = sx.GetDecimal();
         var salaryCurrency = j.TryGetProperty("salaryCurrency", out var sc) ? sc.GetString() ?? "USD" : "USD";
 
-        string? contractType = null;
+        string contractType = "FullTime";
         if (j.TryGetProperty("jobType", out var jt) && jt.ValueKind == JsonValueKind.Array)
         {
-            var types = jt.EnumerateArray().Select(x => x.GetString()).Where(x => x != null).ToArray();
-            contractType = types.Length > 0 ? string.Join(", ", types) : null;
+            var raw = jt.EnumerateArray()
+                .Select(x => (x.GetString() ?? "").ToLowerInvariant())
+                .FirstOrDefault(x => !string.IsNullOrEmpty(x)) ?? "";
+            contractType = raw switch
+            {
+                var s when s.Contains("intern")   => "Internship",
+                var s when s.Contains("contract") => "Contract",
+                var s when s.Contains("part")     => "PartTime",
+                var s when s.Contains("temp")     => "Temporary",
+                _                                 => "FullTime"
+            };
         }
 
         string[]? skills = null;

@@ -353,6 +353,17 @@ public class WorkdayJobsJobHandler : IJobHandler
                     }
                 }
 
+                // ── Per-job visa negation (company-level H1B may be overridden) ─
+                if (item.Job.IsH1BSponsored == true && !string.IsNullOrWhiteSpace(item.Job.JobDescription))
+                {
+                    var neg = ContainsAny(item.Job.JobDescription,
+                        "do not sponsor", "does not sponsor", "no sponsorship", "unable to sponsor",
+                        "cannot sponsor", "will not sponsor", "no h-1b", "no h1b",
+                        "must be authorized to work", "must have work authorization",
+                        "authorized to work in the us", "authorized to work in the united states");
+                    if (neg) { item.Job.IsH1BSponsored = false; item.Job.IsSponsored = false; }
+                }
+
                 // ── ContractType from timeType (only in detail) ───────────────
                 if (string.IsNullOrWhiteSpace(item.Job.ContractType) &&
                     jpi.TryGetProperty("timeType", out var tt) && tt.ValueKind == JsonValueKind.String)
@@ -472,7 +483,7 @@ public class WorkdayJobsJobHandler : IJobHandler
             SalaryCurrency  = "USD",
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            ContractType    = null,   // filled by EnrichWithDescriptionsAsync from timeType
+            ContractType    = "FullTime",   // refined by EnrichWithDescriptionsAsync from timeType
             JobLevel        = NormalizeJobLevel(title),
             Industry        = token.Industry,
             Skills          = null,

@@ -293,7 +293,7 @@ public class LeverJobsJobHandler : IJobHandler
         // ── Description ───────────────────────────────────────────────────────
         string? desc = null;
         if (d.TryGetProperty("description", out var descEl) && descEl.ValueKind == JsonValueKind.String)
-            desc = descEl.GetString();
+            desc = StripHtml(descEl.GetString());
 
         // ── H1B + per-job negation ────────────────────────────────────────────
         var visaNegation = ContainsAny(desc,

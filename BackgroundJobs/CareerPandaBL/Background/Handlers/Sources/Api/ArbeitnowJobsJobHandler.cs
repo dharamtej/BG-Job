@@ -204,7 +204,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         var slug        = j.TryGetProperty("slug",         out var sl) ? sl.GetString()  : null;
         var title       = j.TryGetProperty("title",        out var t)  ? t.GetString()   : "Untitled";
         var companyName = j.TryGetProperty("company_name", out var co) ? co.GetString()  : null;
-        var desc        = j.TryGetProperty("description",  out var d)  ? d.GetString()   : null;
+        var desc        = j.TryGetProperty("description",  out var d)  ? StripHtml(d.GetString())   : null;
         var applyUrl    = j.TryGetProperty("url",          out var u)  ? u.GetString()   : null;
         var location    = j.TryGetProperty("location",     out var lo) ? lo.GetString()  : null;
         var isRemote    = j.TryGetProperty("remote",       out var rm) && rm.ValueKind == JsonValueKind.True;
@@ -259,11 +259,10 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         // ContractType from job_types array — map to standard values
         bool isPartTime   = jobTypesText.Contains("part") || jobTypesText.Contains("part-time");
         bool isInternship = jobTypesText.Contains("intern") || ContainsAny(title, "intern");
-        string? contractType = isInternship ? "Internship"
-            : isContract    ? "Contract"
-            : isPartTime    ? "PartTime"
-            : jobTypes != null && jobTypes.Length > 0 ? "FullTime"   // explicit type known, assume FT
-            : null;  // no type info at all
+        string contractType = isInternship ? "Internship"
+            : isContract ? "Contract"
+            : isPartTime ? "PartTime"
+            : "FullTime";
 
         // Parse location parts
         string? city = null, state = null, country = null;

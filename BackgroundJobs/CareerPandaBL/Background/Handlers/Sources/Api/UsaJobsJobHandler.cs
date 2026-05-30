@@ -262,7 +262,7 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
                 schedule = sn.GetString();
         }
 
-        string? contractType = null;
+        string contractType = "FullTime";
         if (d.TryGetProperty("PositionOfferingType", out var pot) && pot.ValueKind == JsonValueKind.Array)
         {
             var first = pot.EnumerateArray().FirstOrDefault();
@@ -276,7 +276,7 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
                     var s when s.Contains("intern")                                                                                => "Internship",
                     var s when s.Contains("part")                                                                                  => "PartTime",
                     var s when s.Contains("contract") || s.Contains("excepted")                                                   => "Contract",
-                    _ => null  // unknown USAJobs appointment types — keep null rather than guess
+                    _ => "FullTime"
                 };
             }
         }

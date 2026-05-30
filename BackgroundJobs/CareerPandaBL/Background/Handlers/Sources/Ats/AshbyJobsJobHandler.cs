@@ -346,7 +346,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
         // ── Description ───────────────────────────────────────────────────────
         string? desc = null;
         if (d.TryGetProperty("descriptionHtml", out var dh) && dh.ValueKind == JsonValueKind.String)
-            desc = dh.GetString();
+            desc = StripHtml(dh.GetString());
         else if (d.TryGetProperty("descriptionPlain", out var dp) && dp.ValueKind == JsonValueKind.String)
             desc = dp.GetString();
 

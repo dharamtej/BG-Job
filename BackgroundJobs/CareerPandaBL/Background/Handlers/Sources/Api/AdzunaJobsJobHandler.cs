@@ -255,7 +255,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         {
             "permanent" => contractTime == "part_time" ? "PartTime" : "FullTime",
             "contract"  => "Contract",
-            _           => contractTime == "part_time" ? "PartTime" : null
+            _           => contractTime == "part_time" ? "PartTime" : "FullTime"
         };
 
         // WorkType: infer from description keywords; default OnSite for non-remote Adzuna jobs

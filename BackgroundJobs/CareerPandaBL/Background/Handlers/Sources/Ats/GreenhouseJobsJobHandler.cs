@@ -324,10 +324,10 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             if (deptNames.Length > 0) { department = deptNames[0]; skills = deptNames; }
         }
 
-        // ── Description (HTML content) ────────────────────────────────────────
+        // ── Description (HTML → plain text) ──────────────────────────────────
         string? desc = null;
         if (d.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
-            desc = content.GetString();
+            desc = StripHtml(content.GetString());
 
         // Also check description text for H1B keywords in case company name didn't match
         // Per-job negation overrides the company-level sponsor flag — a specific role may
@@ -355,10 +355,8 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                             ContainsAny(jobTitle, "intern");
         bool isPartTime   = ContainsAny(desc,   "part-time", "part time") ||
                             ContainsAny(jobTitle, "part-time", "part time");
-        // Only set ContractType when we have a positive signal — do not default to FullTime
-        string? contractType = (isContract || isInternship || isPartTime)
-            ? JobValidationGate.DeriveContractType(isContract, isInternship, isPartTime)
-            : null;
+        // Always derive ContractType — default is FullTime when no signal detected
+        string contractType = JobValidationGate.DeriveContractType(isContract, isInternship, isPartTime);
 
         // ── Salary ────────────────────────────────────────────────────────────
         decimal? salMin = null, salMax = null;

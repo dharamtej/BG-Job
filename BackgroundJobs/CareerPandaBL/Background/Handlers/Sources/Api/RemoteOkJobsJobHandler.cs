@@ -313,13 +313,13 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         }
 
         // Extract contract type from tags
-        string? contractType = null;
+        string contractType = "FullTime";
         if (tags != null)
         {
-            if (tags.Any(x => x.Equals("contract", StringComparison.OrdinalIgnoreCase))) contractType = "Contract";
-            else if (tags.Any(x => x.Equals("freelance", StringComparison.OrdinalIgnoreCase))) contractType = "Freelance";
-            else if (tags.Any(x => x.Equals("part-time", StringComparison.OrdinalIgnoreCase))) contractType = "Part-time";
-            else if (tags.Any(x => x.Equals("internship", StringComparison.OrdinalIgnoreCase))) contractType = "Internship";
+            if      (tags.Any(x => x.Equals("internship", StringComparison.OrdinalIgnoreCase))) contractType = "Internship";
+            else if (tags.Any(x => x.Equals("contract",   StringComparison.OrdinalIgnoreCase))) contractType = "Contract";
+            else if (tags.Any(x => x.Equals("freelance",  StringComparison.OrdinalIgnoreCase))) contractType = "Contract";
+            else if (tags.Any(x => x.Equals("part-time",  StringComparison.OrdinalIgnoreCase))) contractType = "PartTime";
         }
 
         // Parse city/state/country from location string

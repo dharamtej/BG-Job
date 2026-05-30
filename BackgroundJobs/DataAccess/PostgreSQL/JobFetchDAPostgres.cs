@@ -1158,42 +1158,66 @@ public class JobFetchDAPostgres : IJobFetchDA
         var page     = Math.Max(1, query.Page);
         var pageSize = Math.Clamp(query.PageSize, 1, 100);
 
-        var items = await q
+        // Page raw_jobs first, then enrich — avoids EF Core GroupJoin translation issues
+        var pagedJobs = await q
             .OrderByDescending(j => j.PostDate)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Join(_db.Companies, j => j.OurCompanyId, c => c.Id,
-                (j, c) => new { j, c })
-            .GroupJoin(_db.Industries, x => x.j.IndustryId, i => (int?)i.Id,
-                (x, inds) => new { x.j, x.c, ind = inds.FirstOrDefault() })
-            .GroupJoin(_db.JobRoles, x => x.j.JobRoleId, r => (int?)r.Id,
-                (x, roles) => new { x.j, x.c, x.ind, role = roles.FirstOrDefault() })
-            .Select(x => new RawJobSearchResult
-            {
-                Id             = x.j.Id,
-                PublicId       = x.j.PublicId,
-                JobTitle       = x.j.JobTitle,
-                JobLink        = x.j.JobLink,
-                CompanyName    = x.j.CompanyName ?? x.c.CompanyName,
-                CompanyLogo    = x.c.LogoUrl,
-                CompanyWebsite = x.c.Website,
-                Industry       = x.ind != null ? x.ind.Name : null,
-                Role           = x.role != null ? x.role.Name : null,
-                WorkType       = x.j.WorkType,
-                ContractType   = x.j.ContractType,
-                JobLevel       = x.j.JobLevel,
-                City           = x.j.City,
-                State          = x.j.State,
-                SalaryMin      = x.j.SalaryMin,
-                SalaryMax      = x.j.SalaryMax,
-                SalaryType     = x.j.SalaryType,
-                PostDate       = x.j.PostDate,
-                IsH1BSponsored = x.j.IsH1BSponsored,
-                IsOptCpt       = x.j.IsOptCpt,
-                IsGreenCard    = x.j.IsGreenCard,
-                Source         = x.j.Source
-            })
             .ToListAsync(ct);
+
+        if (pagedJobs.Count == 0)
+            return ([], total);
+
+        // Load company/industry/role lookup data for only these jobs
+        var companyIds  = pagedJobs.Select(j => j.OurCompanyId).Distinct().ToList();
+        var industryIds = pagedJobs.Where(j => j.IndustryId.HasValue).Select(j => j.IndustryId!.Value).Distinct().ToList();
+        var roleIds     = pagedJobs.Where(j => j.JobRoleId.HasValue).Select(j => j.JobRoleId!.Value).Distinct().ToList();
+
+        var companies  = await _db.Companies.AsNoTracking()
+            .Where(c => companyIds.Contains(c.Id))
+            .ToDictionaryAsync(c => c.Id, ct);
+        var industries = industryIds.Count > 0
+            ? await _db.Industries.AsNoTracking()
+                .Where(i => industryIds.Contains((int)i.Id))
+                .ToDictionaryAsync(i => (int)i.Id, ct)
+            : new Dictionary<int, CareerPanda.DataAccess.Entities.Md.MdIndustry>();
+        var roles = roleIds.Count > 0
+            ? await _db.JobRoles.AsNoTracking()
+                .Where(r => roleIds.Contains((int)r.Id))
+                .ToDictionaryAsync(r => (int)r.Id, ct)
+            : new Dictionary<int, CareerPanda.DataAccess.Entities.Md.MdJobRole>();
+
+        var items = pagedJobs.Select(j =>
+        {
+            companies.TryGetValue(j.OurCompanyId, out var co);
+            var indName  = j.IndustryId.HasValue && industries.TryGetValue(j.IndustryId.Value, out var ind) ? ind.Name : null;
+            var roleName = j.JobRoleId.HasValue  && roles.TryGetValue(j.JobRoleId.Value,  out var ro)  ? ro.Name  : null;
+            return new RawJobSearchResult
+            {
+                Id             = j.Id,
+                PublicId       = j.PublicId,
+                JobTitle       = j.JobTitle,
+                JobLink        = j.JobLink,
+                CompanyName    = j.CompanyName ?? co?.CompanyName ?? "",
+                CompanyLogo    = co?.LogoUrl,
+                CompanyWebsite = co?.Website,
+                Industry       = indName,
+                Role           = roleName,
+                WorkType       = j.WorkType,
+                ContractType   = j.ContractType,
+                JobLevel       = j.JobLevel,
+                City           = j.City,
+                State          = j.State,
+                SalaryMin      = j.SalaryMin,
+                SalaryMax      = j.SalaryMax,
+                SalaryType     = j.SalaryType,
+                PostDate       = j.PostDate,
+                IsH1BSponsored = j.IsH1BSponsored,
+                IsOptCpt       = j.IsOptCpt,
+                IsGreenCard    = j.IsGreenCard,
+                Source         = j.Source
+            };
+        }).ToList();
 
         return (items, total);
     }
