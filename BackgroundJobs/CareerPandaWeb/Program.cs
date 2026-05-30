@@ -377,18 +377,41 @@ app.Run();
 // Hangfire.PostgreSql's UseNpgsqlConnection rejects URI-format strings.
 static string ToNpgsqlKeyValue(string cs)
 {
-    if (!cs.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase) &&
-        !cs.StartsWith("postgres://",   StringComparison.OrdinalIgnoreCase))
+    if (string.IsNullOrWhiteSpace(cs))
+        throw new InvalidOperationException("PostgreSQL connection string is empty. Set Connection__Connection / CAREERPANDA_DB_CONNECTION on Railway.");
+
+    // Pool + SSL settings appended to every output so they don't have to be set per-env.
+    const string PoolAndSsl =
+        "SSL Mode=Prefer;Trust Server Certificate=true;Maximum Pool Size=200;Connection Idle Lifetime=120";
+
+    // URI form → expand to key=value.
+    if (cs.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase) ||
+        cs.StartsWith("postgres://",   StringComparison.OrdinalIgnoreCase))
+    {
+        var uri      = new Uri(cs);
+        var userInfo = uri.UserInfo.Split(':', 2);
+        var user     = Uri.UnescapeDataString(userInfo[0]);
+        var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
+        var database = uri.AbsolutePath.TrimStart('/');
+        var port     = uri.Port > 0 ? uri.Port : 5432;
+        return $"Host={uri.Host};Port={port};Database={database};Username={user};Password={password};{PoolAndSsl}";
+    }
+
+    // Already key=value? Just make sure it has Host= and tack pool/ssl on if missing.
+    if (cs.Contains("Host=", StringComparison.OrdinalIgnoreCase) ||
+        cs.Contains("Server=", StringComparison.OrdinalIgnoreCase))
+    {
+        if (!cs.Contains("Maximum Pool Size", StringComparison.OrdinalIgnoreCase))
+            cs = cs.TrimEnd(';') + ";" + PoolAndSsl;
         return cs;
+    }
 
-    var uri      = new Uri(cs);
-    var userInfo = uri.UserInfo.Split(':', 2);
-    var user     = Uri.UnescapeDataString(userInfo[0]);
-    var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
-    var database = uri.AbsolutePath.TrimStart('/');
-    var port     = uri.Port > 0 ? uri.Port : 5432;
-
-    return $"Host={uri.Host};Port={port};Database={database};Username={user};Password={password};SSL Mode=Prefer;Trust Server Certificate=true";
+    // Bare-host malformed input — give a clear actionable error instead of a cryptic Npgsql failure.
+    throw new InvalidOperationException(
+        "PostgreSQL connection string is malformed (missing 'Host=' prefix and not a 'postgresql://' URI). " +
+        "Set Connection__Connection (or CAREERPANDA_DB_CONNECTION) on Railway to a value like:\n" +
+        "  postgresql://postgres:PASSWORD@turntable.proxy.rlwy.net:47103/backgroundjobs\n" +
+        $"Got: '{cs[..Math.Min(60, cs.Length)]}…'");
 }
 
 public partial class Program { }
