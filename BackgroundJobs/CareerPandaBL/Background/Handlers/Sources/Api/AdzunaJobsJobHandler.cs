@@ -210,9 +210,10 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
         var res = await client.SendAsync(req, ct);
         res.EnsureSuccessStatusCode();
 
-        // ReadFromJsonAsync fails when Adzuna returns charset=utf8 (no hyphen) —
-        // .NET only recognises utf-8. Read raw bytes and deserialise manually instead.
-        var raw  = await res.Content.ReadAsStringAsync(ct);
+        // Adzuna returns Content-Type: charset=utf8 (no hyphen); .NET rejects that name.
+        // Read raw bytes and decode manually to bypass the charset parsing.
+        var bytes = await res.Content.ReadAsByteArrayAsync(ct);
+        var raw   = System.Text.Encoding.UTF8.GetString(bytes);
         var json = System.Text.Json.JsonSerializer.Deserialize<JsonElement>(raw);
         var results = json.GetProperty("results");
 

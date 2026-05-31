@@ -38,7 +38,8 @@ public class JobFetchBL
             { "companyenrichment",    "CompanyEnrichment"    },
             { "reclassifyexisting",   "ReclassifyExisting"   },
             { "remotivejobs",         "RemotiveJobs"         },
-            { "weworkremotelyjobs",   "WeWorkRemotelyJobs"   }
+            { "weworkremotelyjobs",   "WeWorkRemotelyJobs"   },
+            { "arbeitnowjobs",        "ArbeitnowJobs"        }
         };
 
     private readonly JobBL _jobBl;
