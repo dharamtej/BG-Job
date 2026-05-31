@@ -113,7 +113,7 @@ public class RecruiteeJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[Recruitee]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -277,9 +277,8 @@ public class RecruiteeJobsJobHandler : IJobHandler
 
         bool remote = d.TryGetProperty("remote", out var rem) && rem.ValueKind == JsonValueKind.True;
 
-        // US-only filter — strict gate (must have positive US signal)
-        if (!UsLocationHelper.IsUs(country, state)) return null;
-        country = "US";
+        // US-only filter — also moves state-names accidentally in country field
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         var workType    = remote ? "Remote" : "OnSite";
         var jobWorkMode = workType;

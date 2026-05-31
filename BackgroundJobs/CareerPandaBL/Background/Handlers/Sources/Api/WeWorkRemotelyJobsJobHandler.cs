@@ -86,7 +86,7 @@ public class WeWorkRemotelyJobsJobHandler : IJobHandler
                 {
                     using var s = _scopeFactory.CreateScope();
                     var da = s.ServiceProvider.GetRequiredService<IJobFetchDA>();
-                    var (ins, upd, err) = await da.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    var (ins, upd, err) = await da.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[WeWorkRemotely]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                 }
 

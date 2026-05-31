@@ -127,7 +127,7 @@ public partial class IcimsJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[ICIMS]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -350,11 +350,8 @@ public partial class IcimsJobsJobHandler : IJobHandler
         var workType    = isRemote ? "Remote" : "OnSite";
         var jobWorkMode = isRemote ? "Remote" : "OnSite";
 
-        // US filter — non-US remote jobs are kept (preserve original country);
-        // non-US on-site jobs are dropped.
-        bool isUs = UsLocationHelper.IsUs(country, state);
-        if (!isUs && !isRemote) return null;
-        if (isUs) country = "US";
+        // US-only filter — also moves state-names accidentally in country field
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         // ── Employment type ───────────────────────────────────────────────────
         bool isContract = false, isInternship = false;

@@ -104,7 +104,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
                 pagesFetched++;
                 totalFetched += jobs.Count;
 
-                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[Arbeitnow]"), cancellationToken);
                 totalInserted += ins;
                 totalUpdated  += upd;
                 totalErrors   += err;
@@ -282,13 +282,9 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
         }
 
         // Reject jobs with an explicitly non-US country.
-        // Remote jobs (country = null) are kept — they're worldwide-eligible remote positions.
-        if (country != null && !UsLocationHelper.CountryVariants.Contains(country) && !isRemote)
+        // null country (truly worldwide remote) is kept as-is.
+        if (country != null && !UsLocationHelper.NormalizeToUs(ref country, ref state))
             return null;
-
-        // Normalize country to "US" when it matches a US variant (e.g. "United States", "U.S.A.")
-        if (country != null && UsLocationHelper.CountryVariants.Contains(country))
-            country = "US";
 
         // Use tags as the industry signal — Arbeitnow tags are tech category keywords
         // (e.g. "javascript", "python", "devops", "react") that alias-match to md.industries

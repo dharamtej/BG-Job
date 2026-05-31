@@ -125,7 +125,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[Greenhouse]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -361,7 +361,10 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         var jobWorkMode = "OnSite";
 
         if (d.TryGetProperty("location", out var loc) && loc.TryGetProperty("name", out var locName))
-            ParseLocation(locName.GetString() ?? "", out city, out state, out country, out workType, out jobWorkMode);
+            UsLocationHelper.ParseLocation(locName.GetString() ?? "", out city, out state, out country, out workType, out jobWorkMode);
+
+        // Reject non-US jobs — ParseLocation defaults to "US" so only explicitly foreign strings fail
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         // ── Department / Industry ─────────────────────────────────────────────
         string? department = null;
@@ -487,53 +490,7 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         };
     }
 
-    // ── Location parsing ──────────────────────────────────────────────────────
-
-    [GeneratedRegex(@"\b[A-Z]{2}\b")]
-    private static partial Regex StateAbbrRegex();
-
-    private static void ParseLocation(
-        string raw, out string? city, out string? state,
-        out string? country, out string workType, out string jobWorkMode)
-    {
-        city        = null;
-        state       = null;
-        country     = "US";
-        workType    = "OnSite";
-        jobWorkMode = "OnSite";
-
-        if (string.IsNullOrWhiteSpace(raw)) return;
-
-        var lower = raw.ToLowerInvariant();
-        if (lower.Contains("remote"))
-        {
-            workType    = "Remote";
-            jobWorkMode = "Remote";
-            if (!lower.Contains(',')) return;
-        }
-        else if (lower.Contains("hybrid"))
-        {
-            workType    = "Hybrid";
-            jobWorkMode = "Hybrid";
-        }
-
-        // Parse "City, ST" or "City, State" or "City, ST, Country"
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        if (parts.Length >= 1) city = parts[0];
-        if (parts.Length >= 2)
-        {
-            var part2 = parts[1].Trim();
-            if (part2.Length > 3 && !StateAbbrRegex().IsMatch(part2))
-                country = part2;
-            else
-                state = part2;
-        }
-        if (parts.Length >= 3)
-            country = parts[2].Trim();
-
-        if (state == null && country == "US" && parts.Length >= 2)
-            country = parts[1].Trim();
-    }
+    // ParseLocation delegated to UsLocationHelper — single source of truth for all handlers.
 
     // ── Retry helper with exponential back-off ────────────────────────────────
     // Retries on 429 (rate-limit) and 503 (transient overload) only.

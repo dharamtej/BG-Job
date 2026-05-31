@@ -114,7 +114,7 @@ public partial class AshbyJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[Ashby]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -295,11 +295,10 @@ public partial class AshbyJobsJobHandler : IJobHandler
         bool foundUs = false;
         foreach (var cand in locCandidates)
         {
-            ParseLocation(cand, isRemote,
-                out var cCity, out var cState, out var cCountry,
-                out var cWork, out var cMode);
+            UsLocationHelper.ParseLocation(cand, out var cCity, out var cState, out var cCountry, out var cWork, out var cMode);
+            if (isRemote) { cWork = "Remote"; cMode = "Remote"; }
 
-            if (UsLocationHelper.CountryVariants.Contains(cCountry ?? "US") || cState != null)
+            if (UsLocationHelper.NormalizeToUs(ref cCountry, ref cState))
             {
                 city = cCity; state = cState; country = "US";
                 workType = cWork; jobWorkMode = cMode;
@@ -510,50 +509,5 @@ public partial class AshbyJobsJobHandler : IJobHandler
     }
 
     // ── Location parsing ──────────────────────────────────────────────────────
-    // US-location reference data lives in UsLocationHelper (shared with all ATS handlers).
-
-    private static void ParseLocation(
-        string raw, bool isRemoteFlag,
-        out string? city, out string? state, out string? country,
-        out string workType, out string jobWorkMode)
-    {
-        city        = null;
-        state       = null;
-        country     = "US";
-        workType    = isRemoteFlag ? "Remote" : "OnSite";
-        jobWorkMode = isRemoteFlag ? "Remote" : "OnSite";
-
-        if (string.IsNullOrWhiteSpace(raw)) return;
-
-        var lower = raw.ToLowerInvariant();
-        if (lower.Contains("remote"))
-        {
-            workType    = "Remote";
-            jobWorkMode = "Remote";
-            if (!lower.Contains(',')) return;
-        }
-        else if (lower.Contains("hybrid"))
-        {
-            workType    = "Hybrid";
-            jobWorkMode = "Hybrid";
-        }
-
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        if (parts.Length >= 1) city = parts[0];
-
-        if (parts.Length >= 2)
-        {
-            var part2 = parts[1].Trim();
-            if (UsLocationHelper.StateAbbrs.Contains(part2))            state = part2;
-            else if (UsLocationHelper.StateNames.Contains(part2))       state = part2;
-            else if (UsLocationHelper.CountryVariants.Contains(part2))  { /* country already US */ }
-            else if (part2.Length > 2)                                  country = part2;
-        }
-
-        if (parts.Length >= 3)
-        {
-            var part3 = parts[2].Trim();
-            country = UsLocationHelper.CountryVariants.Contains(part3) ? "US" : part3;
-        }
-    }
+    // ParseLocation delegated to UsLocationHelper — single source of truth for all handlers.
 }

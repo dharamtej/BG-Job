@@ -119,7 +119,7 @@ public class WorkdayJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[Workday]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -397,6 +397,8 @@ public class WorkdayJobsJobHandler : IJobHandler
                 }
 
                 // ── Country from structured field ─────────────────────────────
+                // alpha2Code is an ISO 3166-1 country code. Only "US" is valid for our purposes.
+                // CA=Canada, DE=Germany, IN=India, GB=UK — NOT US states in this context.
                 if (jpi.TryGetProperty("jobRequisitionLocation", out var reqLoc) &&
                     reqLoc.ValueKind == JsonValueKind.Object &&
                     reqLoc.TryGetProperty("country", out var reqCountry) &&
@@ -404,9 +406,14 @@ public class WorkdayJobsJobHandler : IJobHandler
                     reqCountry.TryGetProperty("alpha2Code", out var alpha2) &&
                     alpha2.ValueKind == JsonValueKind.String)
                 {
-                    var code = alpha2.GetString();
+                    var code = alpha2.GetString()?.ToUpperInvariant();
                     if (!string.IsNullOrWhiteSpace(code))
-                        item.Job.Country = code.ToUpperInvariant();
+                    {
+                        if (string.Equals(code, "US", StringComparison.OrdinalIgnoreCase))
+                            item.Job.Country = "US";
+                        else
+                            item.Job.SourceId = null; // foreign country — JobValidationGate will drop
+                    }
                 }
 
                 // ── City/State fallback if list locationsText gave nothing ─────
@@ -450,10 +457,9 @@ public class WorkdayJobsJobHandler : IJobHandler
 
         // ── Location ──────────────────────────────────────────────────────────
         var locText = d.TryGetProperty("locationsText", out var lt) ? lt.GetString() ?? "" : "";
-        ParseLocation(locText, out var city, out var state, out var country, out var workType, out var jobWorkMode);
+        UsLocationHelper.ParseLocation(locText, out var city, out var state, out var country, out var workType, out var jobWorkMode);
 
-        if (!string.IsNullOrEmpty(country) && !UsLocationHelper.CountryVariants.Contains(country))
-            return null;
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         // ── Post date — "Posted 9 Days Ago" / "Posted Today" / "Posted Yesterday" ──
         var postDate = ParseWorkdayPostedOn(
@@ -518,72 +524,5 @@ public class WorkdayJobsJobHandler : IJobHandler
         return null;
     }
 
-    // ── Location parsing ──────────────────────────────────────────────────────
-    // US-location reference data lives in UsLocationHelper (shared with all ATS handlers).
-
-    private static void ParseLocation(
-        string raw, out string? city, out string? state,
-        out string? country, out string workType, out string jobWorkMode)
-    {
-        city        = null;
-        state       = null;
-        country     = "US";
-        workType    = "OnSite";
-        jobWorkMode = "OnSite";
-
-        if (string.IsNullOrWhiteSpace(raw)) return;
-
-        var lower = raw.ToLowerInvariant();
-        if (lower.Contains("remote"))
-        {
-            workType    = "Remote";
-            jobWorkMode = "Remote";
-            if (!lower.Contains(',')) return;
-        }
-        else if (lower.Contains("hybrid"))
-        {
-            workType    = "Hybrid";
-            jobWorkMode = "Hybrid";
-        }
-
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-
-        // Single-part location: if it's a US country variant keep default "US";
-        // if it's a US state name treat it as state-only; otherwise it's a foreign country.
-        if (parts.Length == 1)
-        {
-            var only = parts[0].Trim();
-            if (UsLocationHelper.CountryVariants.Contains(only))
-                return;  // "United States" alone — country stays "US", no city
-            if (UsLocationHelper.StateNames.Contains(only) || UsLocationHelper.StateAbbrs.Contains(only))
-                { state = only; return; }
-            // anything else is likely a foreign country or city-only — mark as foreign
-            // so the US filter in MapJob drops it unless it's clearly a US location
-            country = only;
-            city    = null;
-            return;
-        }
-
-        if (parts.Length >= 1) city = parts[0];
-
-        if (parts.Length >= 2)
-        {
-            var part2 = parts[1].Trim();
-
-            if (UsLocationHelper.StateAbbrs.Contains(part2))
-                state = part2;
-            else if (UsLocationHelper.StateNames.Contains(part2))
-                state = part2;
-            else if (UsLocationHelper.CountryVariants.Contains(part2))
-                { /* country already "US" */ }
-            else if (part2.Length > 2)
-                country = part2;
-        }
-
-        if (parts.Length >= 3)
-        {
-            var part3 = parts[2].Trim();
-            country = UsLocationHelper.CountryVariants.Contains(part3) ? "US" : part3;
-        }
-    }
+    // ParseLocation delegated to UsLocationHelper — single source of truth for all handlers.
 }

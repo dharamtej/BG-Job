@@ -147,7 +147,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
                         catch (Exception ex) { Logger.LogError(ex, "[JSearch] Broad '{Q}' {L} p{P}", query, location, p); totalErrors++; continue; }
                         if (jobs.Count == 0) break;
                         pagesFetched++; totalFetched += jobs.Count;
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[JSearch]"), cancellationToken);
                         totalInserted += ins; totalUpdated += upd; totalErrors += err;
                         totalSkipped  += jobs.Count - ins - upd - err;
                         await FlushStats();
@@ -173,7 +173,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
                     catch (Exception ex) { Logger.LogError(ex, "[JSearch] Contract '{Q}' {L}", query, location); totalErrors++; continue; }
                     if (jobs.Count == 0) continue;
                     pagesFetched++; totalFetched += jobs.Count;
-                    var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[JSearch]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                     totalSkipped  += jobs.Count - ins - upd - err;
                     await FlushStats();
@@ -200,7 +200,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
                     jobs = jobs.Where(j => j.IsPrimeVendor == true || j.IsC2C == true).ToList();
                     if (jobs.Count == 0) continue;
                     pagesFetched++; totalFetched += jobs.Count;
-                    var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[JSearch]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                     totalSkipped  += jobs.Count - ins - upd - err;
                     await FlushStats();
@@ -333,7 +333,7 @@ public class JSearchJobsJobHandler : JobFetchBaseHandler
             JobDescription    = desc,
             City              = j.TryGetProperty("job_city",    out var ct2) ? ct2.GetString() : null,
             State             = NormalizeState(j.TryGetProperty("job_state",   out var st)  ? st.GetString()  : null),
-            Country           = j.TryGetProperty("job_country", out var cy)  ? cy.GetString() : null,
+            Country           = JobFetchHelpers.NormalizeJobCountry(j.TryGetProperty("job_country", out var cy) ? cy.GetString() : null),
             PostDate          = postDate,
             HoursBackPosted   = ParseHoursBack(postDate),
             SalaryMin         = salMin,

@@ -113,7 +113,7 @@ public class LeverJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[Lever]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -270,7 +270,7 @@ public class LeverJobsJobHandler : IJobHandler
         if (d.TryGetProperty("categories", out var cats))
         {
             if (cats.TryGetProperty("location", out var loc))
-                ParseLocation(loc.GetString() ?? "", out city, out state, out country, out workType, out jobWorkMode);
+                UsLocationHelper.ParseLocation(loc.GetString() ?? "", out city, out state, out country, out workType, out jobWorkMode);
 
             if (cats.TryGetProperty("department", out var dept))
                 department = dept.GetString();
@@ -284,11 +284,8 @@ public class LeverJobsJobHandler : IJobHandler
             }
         }
 
-        // Skip jobs explicitly located outside the US
-        // (Lever convention: an empty/null country is treated as US — ParseLocation
-        // initializes country="US" and only overwrites it for clearly-foreign strings.)
-        if (!string.IsNullOrEmpty(country) && !UsLocationHelper.CountryVariants.Contains(country))
-            return null;
+        // US-only filter — also moves state-names accidentally in country field
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         // ── Description ───────────────────────────────────────────────────────
         string? desc = null;
@@ -373,53 +370,5 @@ public class LeverJobsJobHandler : IJobHandler
     // ── Location parsing ──────────────────────────────────────────────────────
     // US-location reference data lives in UsLocationHelper (shared with all ATS handlers).
 
-    private static void ParseLocation(
-        string raw, out string? city, out string? state,
-        out string? country, out string workType, out string jobWorkMode)
-    {
-        city        = null;
-        state       = null;
-        country     = "US";
-        workType    = "OnSite";
-        jobWorkMode = "OnSite";
-
-        if (string.IsNullOrWhiteSpace(raw)) return;
-
-        var lower = raw.ToLowerInvariant();
-        if (lower.Contains("remote"))
-        {
-            workType    = "Remote";
-            jobWorkMode = "Remote";
-            if (!lower.Contains(',')) return;
-        }
-        else if (lower.Contains("hybrid"))
-        {
-            workType    = "Hybrid";
-            jobWorkMode = "Hybrid";
-        }
-
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        if (parts.Length >= 1) city = parts[0];
-
-        if (parts.Length >= 2)
-        {
-            var part2 = parts[1].Trim();
-
-            if (UsLocationHelper.StateAbbrs.Contains(part2))
-                state = part2;                                    // exact US state abbr (AL, CA, NY…)
-            else if (UsLocationHelper.StateNames.Contains(part2))
-                state = part2;                                    // full US state name (Texas, California…)
-            else if (UsLocationHelper.CountryVariants.Contains(part2))
-                { /* country already "US" */ }                    // USA, U.S., United States…
-            else if (part2.Length > 2)
-                country = part2;                                  // anything else → treat as foreign country
-            // 1-2 char tokens that aren't a known US abbr are ignored
-        }
-
-        if (parts.Length >= 3)
-        {
-            var part3 = parts[2].Trim();
-            country = UsLocationHelper.CountryVariants.Contains(part3) ? "US" : part3;
-        }
-    }
+    // ParseLocation delegated to UsLocationHelper — single source of truth for all handlers.
 }

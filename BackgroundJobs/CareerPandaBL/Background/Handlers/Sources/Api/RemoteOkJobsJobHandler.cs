@@ -145,7 +145,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
                 pagesFetched++;
                 totalFetched += jobs.Count;
 
-                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[RemoteOK]"), cancellationToken);
                 totalInserted += ins;
                 totalUpdated  += upd;
                 totalErrors   += err;
@@ -209,7 +209,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
             {
                 // Post-filter: keep US location or empty location (remote = open to US applicants)
                 var location = item.TryGetProperty("location", out var loc) ? loc.GetString() ?? "" : "";
-                if (!IsUsOrRemoteLocation(location)) continue;
+                if (!UsLocationHelper.IsUsOrRemoteLocation(location)) continue;
 
                 var job = MapJob(item, fetchRunId, sponsors, tag);
 
@@ -223,53 +223,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         return jobs;
     }
 
-    private static readonly HashSet<string> UsStates = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
-        "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
-        "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
-        "VA","WA","WV","WI","WY","DC"
-    };
-
-    private static readonly string[] NonUsKeywords =
-    [
-        "CANADA", "UK", "UNITED KINGDOM", "GERMANY", "INDIA", "MEXICO",
-        "AUSTRALIA", "FRANCE", "SPAIN", "NETHERLANDS", "BRAZIL", "ARGENTINA",
-        "COLOMBIA", "PHILIPPINES", "PAKISTAN", "UKRAINE", "POLAND", "ROMANIA",
-        "PORTUGAL", "ITALY", "SINGAPORE", "JAPAN", "CHINA", "NIGERIA", "KENYA"
-    ];
-
-    private static bool IsUsOrRemoteLocation(string location)
-    {
-        if (string.IsNullOrWhiteSpace(location)) return true;
-
-        var loc = location.ToUpperInvariant();
-
-        if (loc.Contains("USA") || loc.Contains("UNITED STATES") || loc.Contains("U.S.A")) return true;
-
-        var parts = loc.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2 && UsStates.Contains(parts[^1])) return true;
-
-        if (NonUsKeywords.Any(k => loc.Contains(k))) return false;
-
-        return true;
-    }
-
-    private static (string? city, string? state, string? country) ParseUsLocation(string location)
-    {
-        if (string.IsNullOrWhiteSpace(location)) return (null, null, null);
-
-        var parts = location.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-
-        if (parts.Length >= 2 && UsStates.Contains(parts[^1].ToUpperInvariant()))
-            return (parts[0], parts[^1].ToUpperInvariant(), "US");
-
-        if (location.Contains("USA", StringComparison.OrdinalIgnoreCase) ||
-            location.Contains("United States", StringComparison.OrdinalIgnoreCase))
-            return (null, null, "US");
-
-        return (null, null, null);
-    }
+    // IsUsOrRemoteLocation and ParseUsLocation delegated to UsLocationHelper — single source of truth.
 
     private ApiRawJob MapJob(JsonElement j, string fetchRunId, HashSet<string> sponsors, string tag = "")
     {
@@ -323,7 +277,7 @@ public class RemoteOkJobsJobHandler : JobFetchBaseHandler
         }
 
         // Parse city/state/country from location string
-        var (city, state, country) = ParseUsLocation(locationRaw);
+        var (city, state, country) = UsLocationHelper.ParseUsLocation(locationRaw);
 
         // ── Flag detection ────────────────────────────────────────────────────
         // H1B: affirmative phrases only; suppress on explicit negations (same pattern as Jobicy)

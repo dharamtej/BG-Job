@@ -145,7 +145,7 @@ public class AdzunaJobsJobHandler : JobFetchBaseHandler
                         pagesFetched++;
                         totalFetched += jobs.Count;
 
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[Adzuna]"), cancellationToken);
                         totalInserted += ins;
                         totalUpdated  += upd;
                         totalErrors   += err;

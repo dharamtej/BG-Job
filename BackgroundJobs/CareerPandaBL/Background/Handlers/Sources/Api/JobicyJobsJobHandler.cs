@@ -142,7 +142,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
                     if (jobs.Count > 0)
                     {
                         totalFetched += jobs.Count;
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[Jobicy]"), cancellationToken);
                         totalInserted += ins;
                         totalUpdated  += upd;
                         totalErrors   += err;
@@ -267,10 +267,16 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
         string? country = null;
         if (geoRaw != null)
         {
-            var g = geoRaw.ToUpperInvariant();
-            if (g is "USA" or "US" or "UNITED STATES") country = "US";
-            else if (g is "WORLDWIDE" or "ANYWHERE" or "REMOTE") country = null;
-            else country = geoRaw;
+            var lower = geoRaw.ToUpperInvariant();
+            if (lower is "WORLDWIDE" or "ANYWHERE" or "REMOTE")
+                country = null;  // worldwide remote — keep with null country
+            else
+            {
+                // NormalizeToUs handles all US variants + state names/abbrs in one place
+                string? tempState = null;
+                var raw = geoRaw;
+                country = UsLocationHelper.NormalizeToUs(ref raw, ref tempState) ? "US" : geoRaw;
+            }
         }
 
         // H1B: affirmative phrases only; suppress on explicit negations

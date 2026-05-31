@@ -120,7 +120,7 @@ public class BambooHrJobsJobHandler : IJobHandler
                     if (jobs.Count > 0)
                     {
                         Interlocked.Add(ref totalFetched, jobs.Count);
-                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, ct);
+                        var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(JobValidationGate.FilterValid(jobs, _logger, "[BambooHR]"), ct);
                         Interlocked.Add(ref totalInserted, ins);
                         Interlocked.Add(ref totalUpdated,  upd);
                         Interlocked.Add(ref totalErrors,   err);
@@ -351,9 +351,8 @@ public class BambooHrJobsJobHandler : IJobHandler
             jobWorkMode = "Remote";
         }
 
-        // US-only filter (matches Lever/Ashby behavior)
-        if (!UsLocationHelper.IsUs(country, state)) return null;
-        country = "US";
+        // US-only filter — also moves state-names accidentally in country field
+        if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
         // ── Department ────────────────────────────────────────────────────────
         string? department = null;

@@ -145,7 +145,7 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
                     if (jobs.Count == 0) break;
 
                     pagesFetched++; totalFetched += jobs.Count;
-                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[TheMuse]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                     totalSkipped  += jobs.Count - ins - upd - err;
 
@@ -176,7 +176,7 @@ public class TheMuseJobsJobHandler : JobFetchBaseHandler
                     if (jobs.Count == 0) break;
 
                     pagesFetched++; totalFetched += jobs.Count;
-                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[TheMuse]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                     totalSkipped  += jobs.Count - ins - upd - err;
 

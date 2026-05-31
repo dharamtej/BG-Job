@@ -126,7 +126,7 @@ public abstract class JobFetchBaseHandler : IJobHandler
                 pagesFetched++;
                 totalFetched += jobs.Count;
 
-                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                var (ins, upd, err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, $"[{JobType}]"), cancellationToken);
                 totalInserted += ins;
                 totalUpdated  += upd;
                 totalErrors   += err;
@@ -183,6 +183,10 @@ public abstract class JobFetchBaseHandler : IJobHandler
         postDate.HasValue ? (int)(DateTime.UtcNow - postDate.Value).TotalHours : null;
 
     // Delegates to JobFetchHelpers so all handlers (base and standalone) share one implementation.
+    // Delegates to JobValidationGate.FilterValid — convenience wrapper for base-handler subclasses.
+    protected static List<ApiRawJob> ApplyGate(IEnumerable<ApiRawJob> jobs, ILogger? logger = null, string? tag = null)
+        => JobValidationGate.FilterValid(jobs, logger, tag);
+
     protected static bool    ContainsAny(string? text, params string[] keywords) => JobFetchHelpers.ContainsAny(text, keywords);
     protected static string? NormalizeSalaryPeriod(string? raw)                  => JobFetchHelpers.NormalizeSalaryPeriod(raw);
     protected static string? NormalizeJobLevel(string? raw)                      => JobFetchHelpers.NormalizeJobLevel(raw);

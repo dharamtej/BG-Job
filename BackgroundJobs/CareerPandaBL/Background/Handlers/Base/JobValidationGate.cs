@@ -25,6 +25,7 @@ internal static class JobValidationGate
         new(StringComparer.OrdinalIgnoreCase) { "FullTime", "PartTime", "Contract", "Temporary", "Internship" };
 
     // Returns true if the job should be stored; false (with reason) otherwise.
+    // Also normalizes country/state in-place via NormalizeToUs so the stored value is always canonical.
     public static bool TryAccept(ApiRawJob job, out string? rejectReason)
     {
         if (string.IsNullOrWhiteSpace(job.Source))          { rejectReason = "Source missing";          return false; }
@@ -34,12 +35,19 @@ internal static class JobValidationGate
         if (string.IsNullOrWhiteSpace(job.CompanyName))     { rejectReason = "CompanyName missing";     return false; }
         if (string.IsNullOrWhiteSpace(job.JobDescription))  { rejectReason = "JobDescription missing";  return false; }
 
-        // Country must resolve to US — either explicit "US" or recognized US state/country variant
-        if (!UsLocationHelper.IsUs(job.Country, job.State)
-            && !string.Equals(job.Country, "US", StringComparison.OrdinalIgnoreCase))
+        // Normalize country/state in-place: US variants → "US", state-in-country → moved to state.
+        // Null country (worldwide remote from Arbeitnow/Jobicy) is allowed through.
+        if (job.Country != null)
         {
-            rejectReason = $"Country not US (country='{job.Country}', state='{job.State}')";
-            return false;
+            var country = job.Country;
+            var state   = job.State;
+            if (!UsLocationHelper.NormalizeToUs(ref country, ref state))
+            {
+                rejectReason = $"Country not US: '{job.Country}'";
+                return false;
+            }
+            job.Country = country;
+            job.State   = state;
         }
 
         if (string.IsNullOrWhiteSpace(job.WorkType) || !ValidWorkTypes.Contains(job.WorkType))
@@ -65,18 +73,29 @@ internal static class JobValidationGate
     }
 
     // Convenience: returns the job if accepted, null if rejected.
-    // Handlers can write: return JobValidationGate.AcceptOrNull(job, logger, "[Recruitee]");
-    public static ApiRawJob? AcceptOrNull(
-        ApiRawJob job,
-        ILogger? logger = null,
-        string? handlerTag = null)
+    public static ApiRawJob? AcceptOrNull(ApiRawJob job, ILogger? logger = null, string? handlerTag = null)
     {
         if (TryAccept(job, out var reason)) return job;
-
-        logger?.LogDebug(
-            "{Tag} dropped job {Company}/{Title}: {Reason}",
+        logger?.LogDebug("{Tag} dropped {Company}/{Title}: {Reason}",
             handlerTag ?? "[Validation]", job.CompanyName, job.JobTitle, reason);
         return null;
+    }
+
+    // Filters a job list through TryAccept before any BulkUpsertRawJobsAsync call.
+    // TryAccept also normalizes country/state in-place, so stored values are always canonical.
+    // Call this in every handler right before BulkUpsertRawJobsAsync — no non-US job reaches the DB.
+    public static List<ApiRawJob> FilterValid(IEnumerable<ApiRawJob> jobs, ILogger? logger = null, string? tag = null)
+    {
+        var result = new List<ApiRawJob>();
+        foreach (var job in jobs)
+        {
+            if (TryAccept(job, out var reason))
+                result.Add(job);
+            else
+                logger?.LogDebug("{Tag} dropped {Company}/{Title}: {Reason}",
+                    tag ?? "[Gate]", job.CompanyName, job.JobTitle, reason);
+        }
+        return result;
     }
 
     // Derive ContractType from boolean flags when the source API doesn't expose it directly.

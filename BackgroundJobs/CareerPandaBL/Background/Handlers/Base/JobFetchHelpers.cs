@@ -70,6 +70,17 @@ internal static class JobFetchHelpers
 
     // Normalizes a raw state string to 2-letter US abbreviation.
     // Passes through values already in abbreviation form (2 chars, uppercase).
+    // Normalizes a raw country string from an API response to "US" or null.
+    // Returns "US" for any US variant or US state name/abbr accidentally in the country field.
+    // Returns null for foreign countries (callers should treat null as non-US and reject).
+    internal static string? NormalizeJobCountry(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var trimmed = raw.Trim();
+        string? country = trimmed, state = null;
+        return UsLocationHelper.NormalizeToUs(ref country, ref state) ? "US" : null;
+    }
+
     internal static string? NormalizeState(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;

@@ -114,7 +114,7 @@ public class UsaJobsJobHandler : JobFetchBaseHandler
                     if (jobs.Count == 0) { Logger.LogInformation("[USAJobs] {T} — no more results at page {P}", tag, page); break; }
 
                     pagesFetched++; totalFetched += jobs.Count;
-                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(jobs, cancellationToken);
+                    (int ins, int upd, int err) = await fetchDa.BulkUpsertRawJobsAsync(ApplyGate(jobs, Logger, "[USAJobs]"), cancellationToken);
                     totalInserted += ins; totalUpdated += upd; totalErrors += err;
                     totalSkipped  += jobs.Count - ins - upd - err;
 
