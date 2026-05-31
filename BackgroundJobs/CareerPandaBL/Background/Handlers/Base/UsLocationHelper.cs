@@ -1,9 +1,12 @@
 // CareerPandaBL/Background/Handlers/UsLocationHelper.cs
-// Shared US-location reference data + filter used by all job handlers.
+// Shared US-location reference data + normalisation used by all 16 job handlers.
+using System.Text.RegularExpressions;
 namespace CareerPanda.BL.Background.Handlers;
 
-internal static class UsLocationHelper
+internal static partial class UsLocationHelper
 {
+    // ── Reference sets ────────────────────────────────────────────────────────────
+
     public static readonly HashSet<string> StateAbbrs = new(StringComparer.OrdinalIgnoreCase)
     {
         "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
@@ -31,9 +34,28 @@ internal static class UsLocationHelper
         "US", "USA", "U.S.", "U.S.A.", "United States", "United States of America"
     };
 
+    // State name → 2-letter abbreviation (for normalising state field to canonical code)
+    private static readonly Dictionary<string, string> StateNameToAbbr =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            {"Alabama","AL"},{"Alaska","AK"},{"Arizona","AZ"},{"Arkansas","AR"},
+            {"California","CA"},{"Colorado","CO"},{"Connecticut","CT"},{"Delaware","DE"},
+            {"Florida","FL"},{"Georgia","GA"},{"Hawaii","HI"},{"Idaho","ID"},
+            {"Illinois","IL"},{"Indiana","IN"},{"Iowa","IA"},{"Kansas","KS"},
+            {"Kentucky","KY"},{"Louisiana","LA"},{"Maine","ME"},{"Maryland","MD"},
+            {"Massachusetts","MA"},{"Michigan","MI"},{"Minnesota","MN"},{"Mississippi","MS"},
+            {"Missouri","MO"},{"Montana","MT"},{"Nebraska","NE"},{"Nevada","NV"},
+            {"New Hampshire","NH"},{"New Jersey","NJ"},{"New Mexico","NM"},{"New York","NY"},
+            {"North Carolina","NC"},{"North Dakota","ND"},{"Ohio","OH"},{"Oklahoma","OK"},
+            {"Oregon","OR"},{"Pennsylvania","PA"},{"Rhode Island","RI"},
+            {"South Carolina","SC"},{"South Dakota","SD"},{"Tennessee","TN"},{"Texas","TX"},
+            {"Utah","UT"},{"Vermont","VT"},{"Virginia","VA"},{"Washington","WA"},
+            {"West Virginia","WV"},{"Wisconsin","WI"},{"Wyoming","WY"},
+            {"District of Columbia","DC"},{"Washington DC","DC"},{"Washington D.C.","DC"},{"D.C.","DC"},
+            {"Puerto Rico","PR"},{"Guam","GU"},{"Virgin Islands","VI"},{"American Samoa","AS"},
+        };
+
     // ── IsUs ─────────────────────────────────────────────────────────────────────
-    // True when the location is recognizably US. A null/empty country is NOT treated
-    // as US — the caller must provide a positive signal (country or a US state).
     public static bool IsUs(string? country, string? state)
     {
         if (!string.IsNullOrEmpty(country) && CountryVariants.Contains(country)) return true;
@@ -42,42 +64,94 @@ internal static class UsLocationHelper
         return false;
     }
 
+    // ── NormalizeStateCode ────────────────────────────────────────────────────────
+    // Converts any state name or abbr to the canonical 2-letter code ("California" → "CA").
+    public static string? NormalizeStateCode(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var t = raw.Trim();
+        if (t.Length == 2 && StateAbbrs.Contains(t)) return t.ToUpperInvariant();
+        return StateNameToAbbr.TryGetValue(t, out var abbr) ? abbr : t;
+    }
+
     // ── NormalizeToUs ────────────────────────────────────────────────────────────
-    // Normalizes (country, state) in-place and returns true when the job is US.
-    // Handles all edge cases across every handler:
-    //   - US country variants ("United States", "USA") → country = "US"
-    //   - State name/abbr in country field ("Texas", "CA") → moves to state, country = "US"
-    //   - Known US state in state field with null country → country = "US"
-    //   - Anything else → returns false (caller should reject the job)
+    // Normalizes (country, state) in-place; returns true when the job is US.
+    // Always sets country = "US" on success. Normalizes state to 2-letter code.
     public static bool NormalizeToUs(ref string? country, ref string? state)
     {
-        // Country is a known US variant
-        if (!string.IsNullOrEmpty(country) && CountryVariants.Contains(country))
+        if (!string.IsNullOrEmpty(country))
         {
-            country = "US";
-            return true;
+            var trimmed = country.Trim();
+            var upper   = trimmed.ToUpperInvariant();
+
+            // Exact US country variant
+            if (CountryVariants.Contains(trimmed))
+                return SetUs(ref country, ref state, null);
+
+            // Exact US state name or abbreviation in country field → move to state
+            if (StateNames.Contains(trimmed) || StateAbbrs.Contains(trimmed))
+                return SetUs(ref country, ref state, trimmed);
+
+            // US zip code alone ("10950", "94130") → clearly US, no state info
+            if (UsZipRegex().IsMatch(trimmed))
+                return SetUs(ref country, ref state, null);
+
+            // Compound US signals in country field:
+            //   "United States; San Francisco", "Georgia - USA", "US; Remote",
+            //   "Remote - US", "CA USA", "US HQ", "NY • United States", etc.
+            if (upper.Contains("UNITED STATES") ||
+                upper.Contains("U.S.A")         ||
+                upper.StartsWith("US;")         ||
+                upper.StartsWith("US ")         ||
+                upper.StartsWith("US/")         ||
+                upper.StartsWith("USA;")        ||
+                upper.StartsWith("USA ")        ||
+                upper.StartsWith("USA-")        ||
+                upper.EndsWith(" US")           ||
+                upper.EndsWith("-US")           ||
+                upper.EndsWith(";US")           ||
+                upper.EndsWith("(US)")          ||
+                upper.EndsWith("- US")          ||
+                UsaWordRegex().IsMatch(upper))
+            {
+                // Try to recover the state from the compound string
+                var extracted = ExtractStateFromCompound(trimmed);
+                return SetUs(ref country, ref state, extracted);
+            }
+
+            // Compound state signal — "CA; Seattle", "Texas or Remote", "NY | Chicago",
+            // "California (In-Office)", "Indiana 46544"
+            // Split on any non-letter/digit boundary and check the first token.
+            var firstToken = LocationDelimiterRegex().Split(trimmed)[0].Trim();
+            if (!string.IsNullOrEmpty(firstToken))
+            {
+                if (StateAbbrs.Contains(firstToken))
+                    return SetUs(ref country, ref state, firstToken);
+                if (StateNames.Contains(firstToken))
+                    return SetUs(ref country, ref state, firstToken);
+                // 2-word state names as prefix: "New York ..." → "New York"
+                var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length >= 2 && StateNames.Contains(words[0] + " " + words[1]))
+                    return SetUs(ref country, ref state, words[0] + " " + words[1]);
+            }
         }
 
-        // Country field contains a US state name or abbreviation — move it to state
-        if (!string.IsNullOrEmpty(country) && (StateNames.Contains(country) || StateAbbrs.Contains(country)))
+        // Country null/empty — check if state already identifies a US location
+        if (string.IsNullOrEmpty(country) && !string.IsNullOrEmpty(state))
         {
-            if (string.IsNullOrEmpty(state)) state = country;
-            country = "US";
-            return true;
+            if (StateAbbrs.Contains(state) || StateNames.Contains(state))
+            {
+                country = "US";
+                state   = NormalizeStateCode(state);
+                return true;
+            }
         }
 
-        // Country is null/empty but state identifies a US location
-        if (string.IsNullOrEmpty(country) && !string.IsNullOrEmpty(state) &&
-            (StateAbbrs.Contains(state) || StateNames.Contains(state)))
-        {
-            country = "US";
-            return true;
-        }
-
-        // country = "US" already (fast path after prior normalization)
+        // Already "US" fast-path
         if (string.Equals(country, "US", StringComparison.OrdinalIgnoreCase))
         {
             country = "US";
+            state   = NormalizeStateCode(state);
             return true;
         }
 
@@ -85,11 +159,9 @@ internal static class UsLocationHelper
     }
 
     // ── ParseLocation ────────────────────────────────────────────────────────────
-    // Central comma-split location parser shared by all ATS + API handlers.
-    // Handles: "City, ST", "City, State", "City, ST, Country", "Remote", "Hybrid, NY", etc.
-    // Always sets country = "US" when the location is recognizably US.
-    // Sets country to the raw foreign string otherwise (caller should call NormalizeToUs
-    // and reject when it returns false).
+    // Central location parser used by all ATS + API handlers.
+    // Splits on both commas AND semicolons (Greenhouse uses both).
+    // Always produces country = "US" when US signal found, normalised state code, clean city.
     public static void ParseLocation(
         string raw,
         out string? city, out string? state, out string? country,
@@ -109,8 +181,12 @@ internal static class UsLocationHelper
         {
             workType    = "Remote";
             jobWorkMode = "Remote";
-            // Pure "Remote" with no comma — no city/state to parse
-            if (!lower.Contains(',')) return;
+            // Pure "Remote" / "Remote - US" with no commas/semicolons — no city to parse
+            if (!lower.Contains(',') && !lower.Contains(';'))
+            {
+                // Still run NormalizeToUs in case it's "Remote - US" — country already "US"
+                return;
+            }
         }
         else if (lower.Contains("hybrid"))
         {
@@ -118,60 +194,156 @@ internal static class UsLocationHelper
             jobWorkMode = "Hybrid";
         }
 
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        // Split by BOTH comma and semicolon — Greenhouse uses semicolons heavily
+        var parts = raw.Split(new[] { ',', ';' },
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
-        // Single-part: "United States" / "California" / "London"
+        if (parts.Length == 0) return;
+
+        string? cityCandidate = null;
+        bool    hasUsSignal   = false;
+
+        foreach (var part in parts)
+        {
+            var t = part.Trim();
+            if (string.IsNullOrEmpty(t)) continue;
+            var u = t.ToUpperInvariant();
+
+            // Exact US country variant: "United States", "USA", "US", "U.S.", etc.
+            if (CountryVariants.Contains(t))
+            {
+                hasUsSignal = true;
+                continue;
+            }
+
+            // Exact US state name: "California", "New York", "Texas", etc.
+            if (StateNames.Contains(t))
+            {
+                state ??= NormalizeStateCode(t);
+                hasUsSignal = true;
+                continue;
+            }
+
+            // Exact 2-letter US state abbr: "CA", "NY", "TX", etc.
+            if (t.Length == 2 && StateAbbrs.Contains(t))
+            {
+                state ??= t.ToUpperInvariant();
+                hasUsSignal = true;
+                continue;
+            }
+
+            // "NY 10036", "CA 90210" — state abbr + zip code
+            var spaceTokens = t.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (spaceTokens.Length == 2 &&
+                spaceTokens[0].Length == 2 &&
+                StateAbbrs.Contains(spaceTokens[0]) &&
+                UsZipRegex().IsMatch(spaceTokens[1]))
+            {
+                state ??= spaceTokens[0].ToUpperInvariant();
+                hasUsSignal = true;
+                continue;
+            }
+
+            // "California (In-Office)", "Texas or Remote", "Indiana 46544"
+            // — state name as first word of the token
+            if (spaceTokens.Length >= 1 && StateNames.Contains(spaceTokens[0]))
+            {
+                state ??= NormalizeStateCode(spaceTokens[0]);
+                hasUsSignal = true;
+                continue;
+            }
+
+            // "New York City", "New Hampshire (Remote)" — 2-word state name as prefix
+            var words = t.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length >= 2 && StateNames.Contains(words[0] + " " + words[1]))
+            {
+                state ??= NormalizeStateCode(words[0] + " " + words[1]);
+                hasUsSignal = true;
+                continue;
+            }
+
+            // Pure US zip code: "10950", "94130"
+            if (UsZipRegex().IsMatch(t))
+            {
+                hasUsSignal = true;
+                continue;
+            }
+
+            // Compound US signal within part: "NY • United States", "Georgia - USA"
+            if (u.Contains("UNITED STATES") ||
+                u.Contains("U.S.A")         ||
+                UsaWordRegex().IsMatch(u))
+            {
+                hasUsSignal = true;
+                if (state == null) state = ExtractStateFromCompound(t);
+                continue;
+            }
+
+            // Unrecognized — treat as city candidate (first one wins)
+            cityCandidate ??= t;
+        }
+
+        if (hasUsSignal)
+        {
+            city    = cityCandidate;
+            country = "US";
+            state   = NormalizeStateCode(state);
+            return;
+        }
+
+        // ── No US signal found — parse as potentially foreign ──────────────────
         if (parts.Length == 1)
         {
-            var only = parts[0];
-            if (CountryVariants.Contains(only))  return;                   // "United States" → country stays "US"
-            if (StateNames.Contains(only) || StateAbbrs.Contains(only))
-                { state = only; return; }                                  // "Texas" → state
-            country = only;                                                // foreign or bare city — caller filters
+            // Single unrecognized value — could be a foreign country or a bare city.
+            // Set as country so NormalizeToUs can do a final compound check.
+            country = parts[0];
             city    = null;
             return;
         }
 
+        // Multi-part with no direct US signal: treat as "City, Country" or "City, State, Country"
         city = parts[0];
 
         if (parts.Length >= 2)
         {
-            var part2 = parts[1];
-            if      (StateAbbrs.Contains(part2))          state = part2;  // "NY"
-            else if (StateNames.Contains(part2))          state = part2;  // "New York"
-            else if (CountryVariants.Contains(part2))     { /* country stays "US" */ }
-            else if (part2.Length > 2)                    country = part2; // foreign country
-            // 1–2 char tokens that aren't a known US abbr are ignored
+            var p2 = parts[1];
+            if      (StateAbbrs.Contains(p2))      { state = p2.ToUpperInvariant(); country = "US"; }
+            else if (StateNames.Contains(p2))      { state = NormalizeStateCode(p2); country = "US"; }
+            else if (CountryVariants.Contains(p2)) { /* country stays "US" */ }
+            else if (p2.Length > 2)                country = p2;
         }
 
         if (parts.Length >= 3)
         {
-            var part3 = parts[2];
-            country = CountryVariants.Contains(part3) ? "US"
-                    : (StateNames.Contains(part3) || StateAbbrs.Contains(part3)) ? "US"
-                    : part3;
-            // If part3 resolved to "US" and part2 wasn't caught as state, promote city→city, part2→state
-            if (country == "US" && state == null && parts.Length >= 2)
-                state = parts[1];
+            var p3 = parts[2];
+            if (CountryVariants.Contains(p3) || StateNames.Contains(p3) || StateAbbrs.Contains(p3))
+            {
+                country = "US";
+                if (state == null) state = NormalizeStateCode(parts[1]);
+            }
+            else
+            {
+                country = p3;
+            }
         }
 
-        // Final safety: if country ended up as a state name/abbr, move it
+        // Safety: if country ended up as a state name/abbr, move it
         if (country != null && country != "US" &&
             (StateNames.Contains(country) || StateAbbrs.Contains(country)))
         {
-            if (string.IsNullOrEmpty(state)) state = country;
+            state ??= NormalizeStateCode(country);
             country = "US";
         }
 
-        // Normalize country variants to "US"
+        // Normalize country variants
         if (country != null && CountryVariants.Contains(country))
             country = "US";
+
+        if (country == "US")
+            state = NormalizeStateCode(state);
     }
 
     // ── IsUsFriendlyLocation ─────────────────────────────────────────────────────
-    // True when a free-text location string is US-eligible:
-    // null/empty (fully remote), explicit "United States", "Remote", "Anywhere", or contains
-    // a known US state abbreviation in ", XX" form (e.g. "New York, NY").
     public static bool IsUsFriendlyLocation(string? location)
     {
         if (string.IsNullOrWhiteSpace(location)) return true;
@@ -187,8 +359,6 @@ internal static class UsLocationHelper
     }
 
     // ── IsUsOrRemoteLocation ─────────────────────────────────────────────────────
-    // Used by RemoteOK: accepts empty/null (worldwide remote), explicit US signals,
-    // and rejects known foreign country keywords.
     private static readonly string[] ForeignKeywords =
     [
         "CANADA", "UNITED KINGDOM", "GERMANY", "INDIA", "MEXICO", "AUSTRALIA",
@@ -206,40 +376,94 @@ internal static class UsLocationHelper
         foreach (var v in CountryVariants)
             if (upper.Contains(v.ToUpperInvariant())) return true;
 
-        var parts = location.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2 && StateAbbrs.Contains(parts[^1])) return true;
-        if (parts.Length >= 2 && StateNames.Contains(parts[^1])) return true;
+        var parts = location.Split(new[] { ',', ';' },
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2 && (StateAbbrs.Contains(parts[^1]) || StateNames.Contains(parts[^1]))) return true;
 
         foreach (var k in ForeignKeywords)
             if (upper.Contains(k)) return false;
 
-        return true; // unknown — allow through (remote boards often have sparse location data)
+        return true;
     }
 
     // ── ParseUsLocation ──────────────────────────────────────────────────────────
-    // Used by RemoteOK: parses a free-text location into (city, state, country).
     public static (string? city, string? state, string? country) ParseUsLocation(string? location)
     {
         if (string.IsNullOrWhiteSpace(location)) return (null, null, null);
 
-        var parts = location.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var parts = location.Split(new[] { ',', ';' },
+            StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
         if (parts.Length >= 2)
         {
             var last = parts[^1];
-            if (StateAbbrs.Contains(last) || StateNames.Contains(last))
-                return (parts[0], last, "US");
+            if (StateAbbrs.Contains(last))
+                return (parts[0], last.ToUpperInvariant(), "US");
+            if (StateNames.Contains(last))
+                return (parts[0], NormalizeStateCode(last), "US");
             if (CountryVariants.Contains(last))
-                return (parts[0], parts.Length >= 3 ? parts[1] : null, "US");
+                return (parts[0], parts.Length >= 3 ? NormalizeStateCode(parts[1]) : null, "US");
         }
 
         if (parts.Length == 1)
         {
             var only = parts[0];
             if (CountryVariants.Contains(only))                           return (null, null, "US");
-            if (StateNames.Contains(only) || StateAbbrs.Contains(only))  return (null, only, "US");
+            if (StateNames.Contains(only) || StateAbbrs.Contains(only))  return (null, NormalizeStateCode(only), "US");
         }
 
         return (null, null, null);
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+
+    // Sets country = "US", normalises state, optionally overwrites state from stateHint.
+    private static bool SetUs(ref string? country, ref string? state, string? stateHint)
+    {
+        country = "US";
+        if (stateHint != null && string.IsNullOrEmpty(state))
+            state = NormalizeStateCode(stateHint);
+        else
+            state = NormalizeStateCode(state);
+        return true;
+    }
+
+    // Scans a compound string like "NY • United States" or "Georgia - USA" for a state token.
+    private static string? ExtractStateFromCompound(string text)
+    {
+        // Check each whitespace/punctuation-separated token
+        var tokens = NonAlphanumericRegex().Split(text);
+        foreach (var tok in tokens)
+        {
+            var t = tok.Trim();
+            if (t.Length == 2 && StateAbbrs.Contains(t)) return t.ToUpperInvariant();
+            if (StateNames.Contains(t))                  return NormalizeStateCode(t);
+        }
+        // Check 2-word combos: "New York", "North Carolina", etc.
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < words.Length - 1; i++)
+        {
+            var two = words[i] + " " + words[i + 1];
+            if (StateNames.Contains(two)) return NormalizeStateCode(two);
+        }
+        return null;
+    }
+
+    // ── Source-generated regexes ──────────────────────────────────────────────────
+
+    // Matches \bUSA\b (word-boundary) case-insensitively — avoids false positives like "Lausanne"
+    [GeneratedRegex(@"\bUSA\b", RegexOptions.IgnoreCase)]
+    private static partial Regex UsaWordRegex();
+
+    // Splits a compound location on any non-letter/digit boundary: ";", ",", "/", "|", "-", "•", spaces
+    [GeneratedRegex(@"[;,/|\-\s•·]+")]
+    private static partial Regex LocationDelimiterRegex();
+
+    // Matches a US 5-digit zip code (with optional -4 extension)
+    [GeneratedRegex(@"^\d{5}(-\d{4})?$")]
+    private static partial Regex UsZipRegex();
+
+    // Splits on any run of non-alphanumeric characters (for compound state extraction)
+    [GeneratedRegex(@"[^a-zA-Z0-9]+")]
+    private static partial Regex NonAlphanumericRegex();
 }
