@@ -168,6 +168,31 @@ public static class JobClassifier
             "disabled veteran", "service-disabled veteran", "military veteran",
             "veteran status", "encourage veterans to apply"))
             job.IsVeteransEligible = true;
+
+        // ── Default every still-unset flag to false ──────────────────────────────
+        // This method only ever sets a flag to `true`. Any flag a handler didn't
+        // initialize would otherwise stay NULL, and a UI filter like
+        // `WHERE is_h1b_sponsored = false` silently drops NULL rows (three-valued
+        // logic). Coalescing to false here guarantees every job is filterable.
+        job.IsC2C                       ??= false;
+        job.IsContractToHire            ??= false;
+        job.IsFreelanceJob              ??= false;
+        job.IsW2                        ??= false;
+        job.IsContractJob               ??= false;
+        job.IsUniversityJob             ??= false;
+        job.IsPrimeVendor               ??= false;
+        job.IsStaffing                  ??= false;
+        job.IsH1BSponsored              ??= false;
+        job.IsOptCpt                    ??= false;
+        job.IsTnVisa                    ??= false;
+        job.IsE3Visa                    ??= false;
+        job.IsJ1Visa                    ??= false;
+        job.IsGreenCard                 ??= false;
+        job.IsSponsored                 ??= false;
+        job.IsSecurityClearanceRequired ??= false;
+        job.IsStartupJob                ??= false;
+        job.IsNonProfitJob              ??= false;
+        job.IsVeteransEligible          ??= false;
     }
 
     private static bool Has(string? text, params string[] needles)

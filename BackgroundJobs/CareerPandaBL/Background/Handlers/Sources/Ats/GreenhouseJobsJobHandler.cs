@@ -366,9 +366,8 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
         // Reject non-US jobs — ParseLocation defaults to "US" so only explicitly foreign strings fail
         if (!UsLocationHelper.NormalizeToUs(ref country, ref state)) return null;
 
-        // ── Department / Industry ─────────────────────────────────────────────
-        string? department = null;
-        string[]? skills   = null;
+        // ── Department (departments[] → job_domain / job_sub_domain) ──────────
+        string? department = null, subDepartment = null;
         if (d.TryGetProperty("departments", out var depts) && depts.ValueKind == JsonValueKind.Array)
         {
             var deptNames = depts.EnumerateArray()
@@ -376,7 +375,8 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
                 .Select(x => x.GetProperty("name").GetString()!)
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .ToArray();
-            if (deptNames.Length > 0) { department = deptNames[0]; skills = deptNames; }
+            if (deptNames.Length > 0) department    = deptNames[0];
+            if (deptNames.Length > 1) subDepartment = deptNames[1];
         }
 
         // ── Description (HTML → plain text) ──────────────────────────────────
@@ -459,8 +459,10 @@ public partial class GreenhouseJobsJobHandler : IJobHandler
             SalaryCurrency  = salCurrency,
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            Industry        = token.Industry ?? department,
-            Skills          = skills,
+            Industry        = token.Industry,
+            JobDomain       = department,
+            JobSubDomain    = subDepartment,
+            Skills          = null,   // real skills extracted from the description in NormalizeJobs
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyLogoUrl  = boardLogoUrl,

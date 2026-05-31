@@ -233,7 +233,7 @@ public class JobicyJobsJobHandler : JobFetchBaseHandler
 
         DateTime? postDate = null;
         if (pubDateStr != null && DateTime.TryParse(pubDateStr, out var dt))
-            postDate = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+            postDate = dt.ToUniversalTime();
 
         decimal? salMin = null, salMax = null;
         if (j.TryGetProperty("salaryMin", out var sn) && sn.ValueKind == JsonValueKind.Number && sn.GetDecimal() > 0) salMin = sn.GetDecimal();

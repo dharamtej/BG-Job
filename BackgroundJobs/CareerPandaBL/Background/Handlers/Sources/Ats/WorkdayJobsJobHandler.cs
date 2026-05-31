@@ -453,7 +453,18 @@ public class WorkdayJobsJobHandler : IJobHandler
         if (string.IsNullOrEmpty(sourceId)) return null;
 
         var title   = d.TryGetProperty("title", out var t) ? t.GetString() ?? "Untitled" : "Untitled";
-        var jobLink = $"https://{token.CompanySlug}.{token.WdInstance}.myworkdayjobs.com{externalPath}";
+
+        // Public job URL = career-site base + externalPath.
+        // The site base MUST include the locale + site id (e.g. ".../en-US/lws_external_cs"),
+        // otherwise the link 404s. board_url already holds it ("…/en-US/{site_id}/jobs"); strip
+        // the trailing "/jobs" and append externalPath ("/job/{location}/{title}_{reqId}").
+        // Fall back to composing it from the token parts if board_url is missing.
+        var siteBase = string.IsNullOrWhiteSpace(token.BoardUrl)
+            ? $"https://{token.CompanySlug}.{token.WdInstance}.myworkdayjobs.com/en-US/{token.SiteId}"
+            : token.BoardUrl.TrimEnd('/');
+        if (siteBase.EndsWith("/jobs", StringComparison.OrdinalIgnoreCase))
+            siteBase = siteBase[..^"/jobs".Length];
+        var jobLink = $"{siteBase}{externalPath}";
 
         // ── Location ──────────────────────────────────────────────────────────
         var locText = d.TryGetProperty("locationsText", out var lt) ? lt.GetString() ?? "" : "";

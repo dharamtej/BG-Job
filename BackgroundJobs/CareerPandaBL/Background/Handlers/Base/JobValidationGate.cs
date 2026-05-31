@@ -24,6 +24,10 @@ internal static class JobValidationGate
     private static readonly HashSet<string> ValidContractTypes =
         new(StringComparer.OrdinalIgnoreCase) { "FullTime", "PartTime", "Contract", "Temporary", "Internship" };
 
+    // The platform only surfaces recent postings — any job posted more than this
+    // ago is dropped at ingestion, regardless of whether the source API filtered by date.
+    public static readonly TimeSpan MaxPostAge = TimeSpan.FromDays(30);
+
     // Returns true if the job should be stored; false (with reason) otherwise.
     // Also normalizes country/state in-place via NormalizeToUs so the stored value is always canonical.
     public static bool TryAccept(ApiRawJob job, out string? rejectReason)
@@ -65,6 +69,12 @@ internal static class JobValidationGate
         if (job.PostDate is null)
         {
             rejectReason = "PostDate missing";
+            return false;
+        }
+
+        if (job.PostDate.Value < DateTime.UtcNow - MaxPostAge)
+        {
+            rejectReason = $"PostDate older than {MaxPostAge.Days}d ({job.PostDate.Value:yyyy-MM-dd})";
             return false;
         }
 

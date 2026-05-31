@@ -374,7 +374,7 @@ public class RecruiteeJobsJobHandler : IJobHandler
             salRangeText = BuildSalaryRangeText(salMin, salMax, salType);
         }
 
-        // ── Department / category as skills proxy ─────────────────────────────
+        // ── Department / category → job_domain / job_sub_domain ───────────────
         string? department = null;
         if (d.TryGetProperty("department", out var dpt) && dpt.ValueKind == JsonValueKind.String)
             department = dpt.GetString();
@@ -390,14 +390,6 @@ public class RecruiteeJobsJobHandler : IJobHandler
         else if (d.TryGetProperty("created_at", out var ca) && ca.ValueKind == JsonValueKind.String
             && DateTime.TryParse(ca.GetString(), out var cdt))
             postDate = cdt.ToUniversalTime();
-
-        var skills = (department, category) switch
-        {
-            (not null, not null) when department != category => new[] { department, category! },
-            (not null, _)                                     => new[] { department! },
-            (_,        not null)                              => new[] { category! },
-            _ => null
-        };
 
         var job = new ApiRawJob
         {
@@ -422,8 +414,10 @@ public class RecruiteeJobsJobHandler : IJobHandler
             JobWorkMode     = jobWorkMode,
             ContractType    = contractType,
             JobLevel        = NormalizeJobLevel(jobTitle),
-            Industry        = token.Industry ?? department ?? category,
-            Skills          = skills,
+            Industry        = token.Industry,
+            JobDomain       = department,
+            JobSubDomain    = category,
+            Skills          = null,   // real skills extracted from the description in NormalizeJobs
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyUrl      = token.BoardUrl,

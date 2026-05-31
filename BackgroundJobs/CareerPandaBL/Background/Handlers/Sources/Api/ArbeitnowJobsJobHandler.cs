@@ -181,7 +181,7 @@ public class ArbeitnowJobsJobHandler : JobFetchBaseHandler
                     if (ca.ValueKind == JsonValueKind.Number)
                         postDate = DateTimeOffset.FromUnixTimeSeconds(ca.GetInt64()).UtcDateTime;
                     else if (ca.ValueKind == JsonValueKind.String && DateTime.TryParse(ca.GetString(), out var dt))
-                        postDate = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+                        postDate = dt.ToUniversalTime();
                 }
 
                 if (postDate.HasValue && postDate.Value < cutoff)

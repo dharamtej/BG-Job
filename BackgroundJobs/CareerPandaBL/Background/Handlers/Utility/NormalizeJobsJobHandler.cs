@@ -13,6 +13,7 @@
 using System.Text.Json;
 using CareerPanda.DataAccess.DA;
 using CareerPanda.DataAccess.Entities.Api;
+using CareerPanda.DataAccess.Util;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -64,13 +65,15 @@ public class NormalizeJobsJobHandler : IJobHandler
             await da.CreateFetchRunAsync(run);
         }
 
-        // Load alias maps once — they fit in memory (< 1000 rows each)
+        // Load alias maps + skill vocabulary once — they fit in memory (< 1000 rows each)
         Dictionary<string, int> industryMap, roleMap;
+        JobEnricher.SkillIndex skillIndex;
         using (var s = _scopeFactory.CreateScope())
         {
             var da = s.ServiceProvider.GetRequiredService<IJobFetchDA>();
             industryMap = await da.GetIndustryAliasMapAsync(cancellationToken);
             roleMap     = await da.GetJobRoleAliasMapAsync(cancellationToken);
+            skillIndex  = JobEnricher.BuildSkillIndex(await da.GetSkillNamesAsync(cancellationToken));
         }
 
         int totalProcessed = 0, totalMatched = 0, totalFailed = 0, batchNo = 0;
@@ -98,15 +101,18 @@ public class NormalizeJobsJobHandler : IJobHandler
                 {
                     try
                     {
-                        // Industry: prefer raw industry text from handler; fall back to job_title
-                        // (after fixes JSearch/RemoteOK/Arbeitnow now populate Industry from
-                        //  their category/tag signal, but title fallback handles any remaining nulls)
+                        // Industry: raw industry text (job-board category) → department
+                        // (job_domain, the ATS signal) → job_title.
                         var (industryId, iConf) = Resolve(job.Industry, industryMap);
+                        if (industryId == null)
+                            (industryId, iConf) = Resolve(job.JobDomain, industryMap);
                         if (industryId == null)
                             (industryId, iConf) = Resolve(job.JobTitle, industryMap);
 
-                        // Role: always derive from job_title — raw_jobs.role is never populated
+                        // Role: job_title → department (job_domain) fallback.
                         var (roleId,     rConf) = Resolve(job.JobTitle, roleMap);
+                        if (roleId == null)
+                            (roleId, rConf) = Resolve(job.JobDomain, roleMap);
 
                         // Overall confidence: take the lower of the two; if both are null → failed
                         string normStatus;
@@ -117,9 +123,18 @@ public class NormalizeJobsJobHandler : IJobHandler
                         else
                             normStatus = "auto_high";
 
+                        // Enrich filterable fields from title + description.
+                        // Skills are canonicalized against md.skills, so department labels
+                        // a handler may have put in Skills are dropped (not in the vocabulary).
+                        var skills        = JobEnricher.ExtractSkills(job.JobTitle, job.JobDescription, job.Skills, skillIndex);
+                        var (expMin, expMax) = JobEnricher.ExtractExperience(job.JobDescription);
+                        var education     = JobEnricher.ExtractEducation(job.JobDescription);
+
                         using var scope = _scopeFactory.CreateScope();
                         var da = scope.ServiceProvider.GetRequiredService<IJobFetchDA>();
-                        await da.UpdateJobNormalizationAsync(job.Id, industryId, roleId, normStatus, ct);
+                        await da.UpdateJobNormalizationAsync(
+                            job.Id, industryId, roleId, normStatus,
+                            skills, expMin, expMax, education, ct);
 
                         Interlocked.Increment(ref totalProcessed);
                         if (normStatus != "failed") Interlocked.Increment(ref totalMatched);

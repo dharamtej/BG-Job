@@ -120,8 +120,15 @@ public interface IJobFetchDA
     /// <summary>Returns alias→job_role_id map for all seeded/learned aliases.</summary>
     Task<Dictionary<string, int>> GetJobRoleAliasMapAsync(CancellationToken ct = default);
 
-    /// <summary>Set industry_id, job_role_id and norm_status on one raw_job row.</summary>
-    Task UpdateJobNormalizationAsync(int jobId, int? industryId, int? jobRoleId, string normStatus, CancellationToken ct = default);
+    /// <summary>Returns the canonical md.skills names used to extract job skills.</summary>
+    Task<List<string>> GetSkillNamesAsync(CancellationToken ct = default);
+
+    /// <summary>Set industry_id, job_role_id, norm_status and the enriched skills /
+    /// experience / education fields on one raw_job row.</summary>
+    Task UpdateJobNormalizationAsync(
+        int jobId, int? industryId, int? jobRoleId, string normStatus,
+        string[]? skills, int? experienceMin, int? experienceMax, string? education,
+        CancellationToken ct = default);
 
     /// <summary>Insert a new industry alias (lowercased, trimmed) if it does not already exist.</summary>
     Task TryAddIndustryAliasAsync(string alias, int industryId, string? source, CancellationToken ct = default);

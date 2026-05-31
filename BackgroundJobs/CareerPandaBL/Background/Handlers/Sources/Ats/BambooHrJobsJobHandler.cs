@@ -398,8 +398,9 @@ public class BambooHrJobsJobHandler : IJobHandler
             SalaryCurrency  = "USD",
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            Industry        = token.Industry ?? department,
-            Skills          = department != null ? [department] : null,
+            Industry        = token.Industry,
+            JobDomain       = department,
+            Skills          = null,   // real skills extracted from the description in NormalizeJobs
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyUrl      = token.BoardUrl,

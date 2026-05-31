@@ -740,6 +740,8 @@ public class JobFetchDAPostgres : IJobFetchDA
         dest.Country           = src.Country;
         dest.Industry          = src.Industry;
         dest.IndustryId        = src.IndustryId;
+        dest.JobDomain         = src.JobDomain;
+        dest.JobSubDomain      = src.JobSubDomain;
         dest.Role              = src.Role;
         dest.JobLevel          = src.JobLevel;
         dest.JobWorkMode       = src.JobWorkMode;
@@ -781,6 +783,13 @@ public class JobFetchDAPostgres : IJobFetchDA
         dest.IsVeteransEligible           = src.IsVeteransEligible;
         dest.FetchRunId                   = src.FetchRunId;
         dest.Source                       = src.Source;
+
+        // The lines above copy the handler's raw values over the normalizer-owned
+        // fields (industry_id, job_role_id, skills, experience_*, education are reset
+        // to the handler's null/department values). Re-queue the row for normalization
+        // so those filterable fields are recomputed from the refreshed description
+        // instead of silently reverting to un-normalized state on every re-fetch.
+        dest.NormStatus = "pending";
     }
 
     // ── H1B Sponsors ────────────────────────────────────────────────────────
@@ -1050,13 +1059,28 @@ public class JobFetchDAPostgres : IJobFetchDA
         => await _db.JobRoleAliases.AsNoTracking()
             .ToDictionaryAsync(a => a.Alias, a => a.JobRoleId, ct);
 
-    public Task UpdateJobNormalizationAsync(int jobId, int? industryId, int? jobRoleId, string normStatus, CancellationToken ct = default)
+    public async Task<List<string>> GetSkillNamesAsync(CancellationToken ct = default)
+        => await _db.Skills.AsNoTracking()
+            .Where(s => s.Name != null)
+            .Select(s => s.Name)
+            .Distinct()
+            .ToListAsync(ct);
+
+    public Task UpdateJobNormalizationAsync(
+        int jobId, int? industryId, int? jobRoleId, string normStatus,
+        string[]? skills, int? experienceMin, int? experienceMax, string? education,
+        CancellationToken ct = default)
         => _db.RawJobs
             .Where(j => j.Id == jobId)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.IndustryId,  industryId)
-                .SetProperty(x => x.JobRoleId,   jobRoleId)
-                .SetProperty(x => x.NormStatus,  normStatus),
+                .SetProperty(x => x.IndustryId,             industryId)
+                .SetProperty(x => x.JobRoleId,              jobRoleId)
+                .SetProperty(x => x.NormStatus,             normStatus)
+                .SetProperty(x => x.Skills,                 skills)
+                .SetProperty(x => x.ExperienceMin,          experienceMin)
+                .SetProperty(x => x.ExperienceMax,          experienceMax)
+                .SetProperty(x => x.ExperienceYears,        experienceMin)
+                .SetProperty(x => x.EducationQualification, education),
             ct);
 
     public async Task TryAddIndustryAliasAsync(string alias, int industryId, string? source, CancellationToken ct = default)

@@ -264,7 +264,7 @@ public class LeverJobsJobHandler : IJobHandler
         string? city = null, state = null, country = "US";
         var workType    = "OnSite";
         var jobWorkMode = "OnSite";
-        string? department = null;
+        string? department = null, team = null;
         bool isContract = false, isInternship = false;
 
         if (d.TryGetProperty("categories", out var cats))
@@ -274,6 +274,9 @@ public class LeverJobsJobHandler : IJobHandler
 
             if (cats.TryGetProperty("department", out var dept))
                 department = dept.GetString();
+
+            if (cats.TryGetProperty("team", out var teamEl))
+                team = teamEl.GetString();
 
             if (cats.TryGetProperty("commitment", out var commit))
             {
@@ -337,8 +340,10 @@ public class LeverJobsJobHandler : IJobHandler
             SalaryCurrency  = "USD",
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            Industry        = token.Industry ?? department,
-            Skills          = department != null ? [department] : null,
+            Industry        = token.Industry,
+            JobDomain       = department,
+            JobSubDomain    = team,
+            Skills          = null,   // real skills extracted from the description in NormalizeJobs
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyUrl      = token.BoardUrl,

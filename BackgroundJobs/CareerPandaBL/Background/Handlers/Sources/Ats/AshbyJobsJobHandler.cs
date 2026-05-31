@@ -423,14 +423,6 @@ public partial class AshbyJobsJobHandler : IJobHandler
             && DateTime.TryParse(ua.GetString(), out var udt))
             postDate = udt.ToUniversalTime();
 
-        var skills = (department, team) switch
-        {
-            (not null, not null) => new[] { department, team },
-            (not null, null)     => new[] { department },
-            (null, not null)     => new[] { team },
-            _ => null
-        };
-
         return new ApiRawJob
         {
             PublicId        = Guid.NewGuid().ToString("N"),
@@ -452,8 +444,10 @@ public partial class AshbyJobsJobHandler : IJobHandler
             SalaryCurrency  = salCurrency,
             WorkType        = workType,
             JobWorkMode     = jobWorkMode,
-            Industry        = token.Industry ?? department,
-            Skills          = skills,
+            Industry        = token.Industry,
+            JobDomain       = department,
+            JobSubDomain    = team,
+            Skills          = null,   // real skills extracted from the description in NormalizeJobs
             ApplyType       = "ExternalApply",
             CompanyName     = token.CompanyName,
             CompanyUrl      = token.BoardUrl,
