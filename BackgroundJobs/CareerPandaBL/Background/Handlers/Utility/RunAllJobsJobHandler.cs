@@ -1,8 +1,11 @@
 // CareerPandaBL/Background/Handlers/RunAllJobsJobHandler.cs
 // META-HANDLER : runs every job-fetch handler sequentially in one task.
-// FLOW : ATS board-token sources first (Greenhouse → … → Recruitee),
-//        then the API/query sources (AllJobs/JSearch, Adzuna, …),
-//        and finally H1B sponsor enrichment (operates on already-fetched rows).
+// FLOW : API sources first (Adzuna, USAJobs, TheMuse, RemoteOK, Jobicy, Remotive, WeWorkRemotely, Arbeitnow),
+//        then smaller ATS sources (Lever, Ashby, Recruitee),
+//        then post-processing (ReclassifyExisting, NormalizeJobs),
+//        and finally the heavy ATS sources (Workday, Greenhouse) at the end.
+//        Workday and Greenhouse run last because they have the largest token sets
+//        and most API calls — keeping them at the end avoids blocking lighter sources.
 //        Each child runs to completion before the next starts, and each writes
 //        its own api.job_fetch_runs row (fresh JobId) so it shows up individually
 //        under GET /api/fetchjobs/runs. A failure in one child is logged and the
@@ -23,17 +26,7 @@ public class RunAllJobsJobHandler : IJobHandler
     // Unregistered types are skipped gracefully (logged, chain continues).
     private static readonly string[] ChildJobTypes =
     [
-        // ── ATS board-token sources (each internally parallel) ──────────────
-        // Greenhouse is intentionally last among ATS — it has the largest token
-        // set (17K+) and the heaviest per-board cost (N+1 detail fetches).
-        "LeverJobs",
-        "AshbyJobs",
-        "WorkdayJobs",
-        "RecruiteeJobs",
-        // "BambooHRJobs",  // DISABLED — Zscaler SASE-SWG blocks Railway datacenter IPs entirely
-        // "iCIMSJobs",     // DISABLED — AWS WAF JavaScript challenge; impossible from server-side HTTP
-        "GreenhouseJobs",
-        // ── Free / unlimited API sources ────────────────────────────────────
+        // ── Fast / unlimited API sources first ───────────────────────────────
         // JSearch (JSearchJobs) excluded — rate-limited quota, run manually.
         "AdzunaJobs",         // Adzuna — free, broad sweep
         "UsaJobs",            // USAJobs.gov — 2 sweeps: Government + University
@@ -43,10 +36,21 @@ public class RunAllJobsJobHandler : IJobHandler
         "RemotiveJobs",       // Remotive — free, US-friendly filter
         "WeWorkRemotelyJobs", // WeWorkRemotely — free RSS
         "ArbeitnowJobs",      // Arbeitnow — US+remote filter applied
-        // ── Post-processing — runs after every fetch refreshes classification flags
+        // ── Smaller ATS sources ──────────────────────────────────────────────
+        "LeverJobs",
+        "AshbyJobs",
+        "RecruiteeJobs",
+        // "BambooHRJobs",  // DISABLED — Zscaler SASE-SWG blocks Railway datacenter IPs entirely
+        // "iCIMSJobs",     // DISABLED — AWS WAF JavaScript challenge; impossible from server-side HTTP
+        // ── Post-processing ──────────────────────────────────────────────────
+        // Runs after all lighter sources so classification is fresh before the heavy ATS runs.
         "ReclassifyExisting",
-        // Links industry_id + job_role_id via alias maps — must run after Reclassify
         "NormalizeJobs",
+        // ── Heavy ATS sources last — largest token sets, most API calls ──────
+        // Workday and Greenhouse run at the end so they don't block earlier sources
+        // and post-processing has already handled everything fetched before them.
+        "WorkdayJobs",        // Workday — many sites, parallel per-tenant
+        "GreenhouseJobs",     // Greenhouse — 17K+ boards, heaviest N+1 detail fetches
         // H1BSponsorEnrichment and CompanyEnrichment stay manual-only.
     ];
 
